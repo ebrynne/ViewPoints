@@ -1,0 +1,162 @@
+include httpserver.repy
+
+"""
+<Program Name>
+  viewproxy.repy
+
+<Started>
+  June 3rd, 2011
+
+<Author>
+  Evan Brynne
+
+<Purpose>
+  This program creates a proxyserver on the current vessel at a user specified
+  port.Its requests and returned data are encrypted to ensure the integrity of
+  the returned page (not yet implemented). This file derives some of its
+  functionality from YoonSung Hong's proxyserver.repy. It uses his page 
+  chacheing design, which returns a locally cached version of a page if the 
+  user enables the setting.
+  
+  This file relies on a slightly modified version of httpserver.repy, though 
+  the changes may later be merged with trunk version.
+
+<Exception>
+  None 
+"""
+
+def clearCookies():
+  print "I should have a clear cookies function"
+
+def useCaching(cache):
+  mycontext['usecache'] = cache
+
+def loadPage(post_map):
+  url = post_map['page']
+  headers={'User-Agent': post_map['useragent']}
+  if url in mycontext['cookies']:
+    headers['Cookie'] = mycontext['cookies'][url]
+  try:
+    loaded = httpretrieve_open(url, httpheaders=headers)
+  except Exception, e:
+    print "Error loading page: %s" % str(e)
+    return e
+  if url in mycontext['cookies']:
+    mycontext['cookies'][url] = list(set(mycontext['cookies'][url].extend(loaded.headers['Set-Cookie'])))
+  else:
+    mycontext['cookies'][url] = loaded.headers['Set-Cookie']
+  return loaded.read()
+  
+funcs = {'/page' : loadPage, '/viewpoints/setcache' : useCaching, \
+  '/viewpoints/clearcookies' : clearCookies}  
+
+
+def proxyServer(request):
+  """
+  <Purpose>
+    Recieve request from viewpoints server, and after decrypting the data,
+    load the content from the url or from the local cache.
+    
+  <Exception>
+    None
+    
+  <Return>
+    Dictionary that contains header information and Html string 
+    of web page content.
+  """
+    
+  # Interpret the client requests
+  httppath = request['path']
+  query = request['querystr']
+  
+  # Bind path and query
+  completeUrl = httppath
+  if query:
+    completeUrl += "?" + query
+  
+  posted_data = None
+  # Check for posted data
+  if request['verb'] == 'POST':
+    posted_data = request['datastream'].read()
+  params = urllib_unquote_parameters(posted_data)
+
+  htmlresponse = "None"
+  if completeUrl in funcs.keys():
+    htmlresponse = funcs[completeUrl](params)
+  else:
+    htmlresponse = 'Header Text: %s <br \> Map: %s' % (request, params)
+  
+  #if mycontext['usecache']
+  #cachedata = getCache(completeUrl)
+  
+  # Header + Content sent to client(web-browser)
+  #print "HTML: %s" % htmlresponse
+  res = {}
+  res["version"] = "1.1"
+  res["statuscode"] = 200
+  res["statusmsg"] = "OK"
+  res["headers"] = {} 
+  res["message"] = htmlresponse
+  
+  return res
+
+def getCache(url):
+  """
+  <Purpose>
+    Retrieves cached data for a specified url. Speeds content load times if 
+    the user enable this functionality.
+  <Exception>
+    None
+  <Return>
+    String of data if cache for url exist. Otherwise, returns None.
+  """
+  
+  # dictionary saves cache data with url keys.
+  cachelistbyurl = mycontext['cache']
+  
+  if url in cachelistbyurl:
+    return cachelistbyurl[url]
+  else:
+    None
+
+
+if callfunc=='initialize':
+  """
+  <Purpose>
+    Start the proxy server at user's ip and changable port.
+  <Arguments>
+    port:
+      The port which the server should listen at. If no port is provided it
+      will default to port 8008
+  <Exceptions>
+    None
+
+  <Returns>
+    None.  
+  """  
+
+  # Proxy host/ip and port number
+  port = 8008
+  ip = getmyip()
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  elif len(callargs) == 1:
+    port = int(callargs[0])
+    ip = getmyip()
+    
+  # Cache Setup
+  mycontext['usecache']
+  mycontext['cache'] = dict([])
+
+  # Sever/Port information
+  mycontext['ip'] = ip
+  mycontext['port'] = port
+  
+  mycontext['cookies'] = {}
+  
+  # Build proxy server
+  viewProxy = httpserver_registercallback((ip, port), proxyServer)
+
+  # Report
+  print "##### Proxy running on " + ip + ":" + str(port)
+

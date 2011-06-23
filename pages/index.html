@@ -1,0 +1,49 @@
+<html>
+<head>
+<title>ViewPoints Homepage</title>
+<script type="text/javascript" src="js/jquery.js"></script>
+<script type="text/javascript">
+$(function() {
+    $.post('/locations', function(json){
+            json.options.forEach(function(location){
+                $("#locations").append("<option value=" + location.ip + ">" + location.loc + "</option>");
+            });
+    }, "json");
+    
+    $.post('/platforms', {id : 4}, function(json){
+            $("#platforms").html('')
+            json.options.forEach(function(platform){
+                $("#platforms").append("<option value=" + platform.id + ">" + platform.desc + "</option>");
+            });
+    }, "json");
+});
+
+function loadBrowsers() {
+    $.post('/browsers', {id : $('#platforms option:selected').val()}, function(json){
+            $("#browsers").html('')
+            json.options.forEach(function(browser){
+                $("#browsers").append("<option value=" + browser.id + ">" + browser.desc + "</option>");
+            });
+    }, "json");
+}
+
+</script>
+</head>
+<body>
+Viewpoints!<br />
+<form name="loadPage" action="location" method="GET">
+<label for="page">Page URL:</label>
+<input type="text" name="url" id="page"></input><br />
+<label for="locations">Location</label>
+<select name="loc" id="locations">
+</select><br />
+<label for="platforms">Platforms:</label>
+<select id="platforms" onchange="loadBrowsers()">
+</select><br />
+<label for="browser">Browser:</label>
+<select name="browser" id="browsers">
+</select><br />
+<input type="submit" value="Load Page"></input>
+</form>
+</body>
+</html>

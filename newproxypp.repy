@@ -1,0 +1,2452 @@
+#begin include httpserver.repy
+"""
+<Program Name>
+  httpserver.repy
+
+<Started>
+  July 29, 2009
+
+<Author>
+  Conrad Meyer
+
+<Purpose>
+  This is a library that abstracts away the details of the HTTP protocol,
+  instead calling a user-supplied function on each request. The return
+  value of the user-supplied function determines the response that is sent
+  to the HTTP client.
+
+"""
+
+
+
+#begin include urllib.repy
+def urllib_quote(inputstring, safestring="/"):
+  """
+  <Purpose>
+    Encode an inputstring such that it can be used safely in a URL or XML
+    document.
+
+  <Arguments>
+    inputstring:
+           The string to urlencode.
+
+    safestring (optional):
+           Specifies additional characters that should not be quoted --
+           defaults to "/".
+
+  <Exceptions>
+    TypeError if the inputstring or safestring parameters aren't strings.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    Urlencoded version of the passed string.
+  """
+
+  if type(inputstring) is not str:
+    raise TypeError("urllib_quote's inputstring parameter must be a string, not '"+str(type(inputstring))+"'")
+  if type(safestring) is not str:
+    raise TypeError("urllib_quote's safestring parameter must be a string, not '"+str(type(safestring))+"'")
+  
+
+  resultstr = ""
+
+  # We go through each character in the string; if it's not in [0-9a-zA-Z]
+  # we wrap it.
+
+  safeset = set(safestring)
+
+  for char in inputstring:
+    asciicode = ord(char)
+    if (asciicode >= ord("0") and asciicode <= ord("9")) or \
+        (asciicode >= ord("A") and asciicode <= ord("Z")) or \
+        (asciicode >= ord("a") and asciicode <= ord("z")) or \
+        asciicode == ord("_") or asciicode == ord(".") or \
+        asciicode == ord("-") or char in safeset:
+      resultstr += char
+    else:
+      resultstr += "%%%02X" % asciicode
+
+  return resultstr
+
+
+
+
+def urllib_quote_plus(inputstring, safestring=""):
+  """
+  <Purpose>
+    Encode a string to go in the query fragment of a URL.
+
+  <Arguments>
+    inputstring:
+           The string to urlencode.
+
+    safestring (optional):
+           Specifies additional characters that should not be quoted --
+           defaults to the empty string.
+
+  <Exceptions>
+    TypeError if the inputstring or safestring parameters aren't strings.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    Urlencoded version of the passed string.
+  """
+
+  if type(inputstring) is not str:
+    raise TypeError("urllib_quote_plus' inputstring parameter must be a string, not '"+str(type(inputstring))+"'")
+  if type(safestring) is not str:
+    raise TypeError("urllib_quote_plus' safestring parameter must be a string, not '"+str(type(safestring))+"'")
+  
+
+  return urllib_quote(inputstring, safestring + " ").replace(" ", "+")
+
+
+
+
+def urllib_unquote(inputstring):
+  """
+  <Purpose>
+    Unquote a urlencoded string.
+
+  <Arguments>
+    inputstring:
+           The string to unquote.
+
+  <Exceptions>
+    TypeError if the inputstring isn't a string
+    ValueError thrown if the last wrapped octet isn't a valid wrapped octet
+    (i.e. if the string ends in "%" or "%x" rather than "%xx". Also throws
+    ValueError if the nibbles aren't valid hex digits.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    The decoded string.
+  """
+
+  if type(inputstring) is not str:
+    raise TypeError("urllib_unquote's inputstring parameter must be a string, not '"+str(type(inputstring))+"'")
+  
+
+  resultstr = ""
+
+  # We go through the inputstring from end to beginning, looking for wrapped
+  # octets. When one is found we add it (unwrapped) and the following
+  # string to the resultant string, and shorten the original inputstring.
+
+  while True:
+    lastpercentlocation = inputstring.rfind("%")
+    if lastpercentlocation < 0:
+      break
+
+    wrappedoctetstr = inputstring[lastpercentlocation+1:lastpercentlocation+3]
+    if len(wrappedoctetstr) != 2:
+      raise ValueError("Quoted string is poorly formed")
+
+    resultstr = \
+        chr(int(wrappedoctetstr, 16)) + \
+        inputstring[lastpercentlocation+3:] + \
+        resultstr
+    inputstring = inputstring[:lastpercentlocation]
+
+  resultstr = inputstring + resultstr
+  return resultstr
+
+
+
+
+def urllib_unquote_plus(inputstring):
+  """
+  <Purpose>
+    Unquote the urlencoded query fragment of a URL.
+
+  <Arguments>
+    inputstring:
+           The string to unquote.
+
+  <Exceptions>
+    TypeError if the inputstring isn't a string
+    ValueError thrown if the last wrapped octet isn't a valid wrapped octet
+    (i.e. if the inputstring ends in "%" or "%x" rather than "%xx". Also throws
+    ValueError if the nibbles aren't valid hex digits.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    The decoded string.
+  """
+  if type(inputstring) is not str:
+    raise TypeError("urllib_unquote_plus' inputstring parameter must be a string, not '"+str(type(inputstring))+"'")
+
+  return urllib_unquote(inputstring.replace("+", " "))
+
+
+
+
+def urllib_quote_parameters(inputdictionary):
+  """
+  <Purpose>
+    Encode a dictionary of (key, value) pairs into an HTTP query string or
+    POST body (same form).
+
+  <Arguments>
+    dictionary:
+           The dictionary to quote.
+
+  <Exceptions>
+    TypeError if the inputdictionary isn't a dict.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    The quoted dictionary.
+  """
+  if type(inputdictionary) is not dict:
+    raise TypeError("urllib_quote_parameters' inputstringdictionary parameter must be a dict, not '"+str(type(inputstring))+"'")
+
+  quoted_keyvals = []
+  for key, val in inputdictionary.items():
+    quoted_keyvals.append("%s=%s" % (urllib_quote(key), urllib_quote(val)))
+
+  return "&".join(quoted_keyvals)
+
+
+
+
+def urllib_unquote_parameters(inputstring):
+  """
+  <Purpose>
+    Decode a urlencoded query string or POST body.
+
+  <Arguments>
+    inputstring:
+           The string to decode.
+
+  <Exceptions>
+    TypeError if the inputstring isn't a string
+    ValueError if the inputstring is poorly formed.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    A dictionary mapping keys to values.
+  """
+
+  if type(inputstring) is not str:
+    raise TypeError("urllib_unquote_parameters' inputstring parameter must be a string, not '"+str(type(inputstring))+"'")
+
+  keyvalpairs = inputstring.split("&")
+  res = {}
+
+  for quotedkeyval in keyvalpairs:
+    # Throw ValueError if there is more or less than one '='.
+    quotedkey, quotedval = quotedkeyval.split("=")
+    key = urllib_unquote_plus(quotedkey)
+    val = urllib_unquote_plus(quotedval)
+    res[key] = val
+
+  return res
+
+#end include urllib.repy
+#begin include urlparse.repy
+"""
+<Program Name>
+  urlparse.repy
+
+<Started>
+  May 15, 2009
+
+<Author>
+  Michael Phan-Ba
+
+<Purpose>
+  Provides utilities for parsing URLs, based on the Python 2.6.1 module urlparse.
+
+"""
+
+
+def urlparse_urlsplit(urlstring, default_scheme="", allow_fragments=True):
+  """
+  <Purpose>
+    Parse a URL into five components, returning a dictionary.  This corresponds
+    to the general structure of a URL:
+    scheme://netloc/path;parameters?query#fragment.  The parameters are not
+    split from the URL and individual componenets are not separated.
+
+    Only absolute server-based URIs are currently supported (all URLs will be
+    parsed into the components listed, regardless of the scheme).
+
+  <Arguments>
+    default_scheme:
+      Optional: defaults to the empty string.  If specified, gives the default
+      addressing scheme, to be used only if the URL does not specify one.
+
+    allow_fragments:
+      Optional: defaults to True.  If False, fragment identifiers are not
+      allowed, even if the URL's addressing scheme normally does support them.
+
+  <Exceptions>
+    ValueError on parsing a non-numeric port value.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    A dictionary containing:
+
+    Key         Value                               Value if not present
+    ============================================================================
+    scheme      URL scheme specifier                empty string
+    netloc      Network location part               empty string
+    path        Hierarchical path                   empty string
+    query       Query component                     empty string
+    fragment    Fragment identifier                 empty string
+    username    User name                           None
+    password    Password                            None
+    hostname    Host name (lower case)              None
+    port        Port number as integer, if present  None
+
+  """
+
+  components = {"scheme": default_scheme, "netloc": "", "path": "", "query": "",
+    "fragment": "", "username": None, "password": None, "hostname": None,
+    "port": None }
+
+  # Extract the scheme, if present.
+  (lpart, rpart) = _urlparse_splitscheme(urlstring)
+  if lpart:
+    components["scheme"] = lpart
+
+  # Extract the server information, if present.
+  if rpart.startswith("//"):
+    (lpart, rpart) = _urlparse_splitnetloc(rpart, 2)
+    components["netloc"] = lpart
+
+    (components["username"], components["password"], components["hostname"],
+      components["port"]) = _urlparse_splitauthority(lpart)
+
+  # Extract the fragment.
+  if allow_fragments:
+    (rpart, components["fragment"]) = _urlparse_splitfragment(rpart)
+
+
+  # Extract the query.
+  (components["path"], components["query"]) = _urlparse_splitquery(rpart)
+  print "URL %s" % components
+  return components
+
+
+def _urlparse_splitscheme(url):
+  """Parse the scheme portion of the URL"""
+  # The scheme is valid only if it contains these characters.
+  scheme_chars = \
+    "abcdefghijklmnopqrstuvwxyz0123456789+-."
+
+  scheme = ""
+  rest = url
+
+  spart = url.split(":", 1)
+  if len(spart) == 2:
+
+    # Normalize the scheme.
+    spart[0] = spart[0].lower()
+
+    # A scheme is valid only if it starts with an alpha character.
+    if spart[0] and spart[0][0].isalpha():
+      for char in spart[0]:
+        if char not in scheme_chars:
+          break
+      (scheme, rest) = spart
+
+  return scheme, rest
+
+
+def _urlparse_splitnetloc(url, start=0):
+  """Parse the netloc portion of the URL"""
+
+  # By default, the netloc is delimited by the end of the URL.
+  delim = len(url)
+
+  # Find the left-most delimiter.
+  for char in "/?#":
+    xdelim = url.find(char, start)
+    if xdelim >= 0:
+      delim = min(delim, xdelim)
+
+  # Return the netloc and the rest of the URL.
+  return url[start:delim], url[delim:]
+
+
+def _urlparse_splitauthority(netloc):
+  """Parse the authority portion of the netloc"""
+
+  # The authority can have a userinfo portion delimited by "@".
+  authority = netloc.split("@", 1)
+
+  # Default values.
+  username = None
+  password = None
+  hostname = None
+  port = None
+
+  # Is there a userinfo portion?
+  if len(authority) == 2:
+
+    # userinfo can be split into username:password
+    userinfo = authority[0].split(":", 1)
+
+    # hostport can be split into hostname:port
+    hostport = authority[1].split(":", 1)
+
+    if userinfo[0]:
+      username = userinfo[0]
+    if len(userinfo) == 2:
+      password = userinfo[1]
+
+  # No userinfo portion found.
+  else:
+
+    # hostport can be split into hostname:port
+    hostport = netloc.split(":", 1)
+
+  # Is there a port value?
+  if hostport[0]:
+    hostname = hostport[0]
+  if len(hostport) == 2:
+    port = int(hostport[1], 10)
+
+  # Return the values.
+  return username, password, hostname, port
+
+
+def _urlparse_splitquery(url):
+  """Parse the query portion of the url"""
+
+  qpart = url.split("?", 1)
+  if len(qpart) == 2:
+    query = qpart[1]
+  else:
+    query = ""
+
+  return qpart[0], query
+
+
+def _urlparse_splitfragment(url):
+  """Parse the query portion of the url"""
+
+  fpart = url.split("#", 1)
+  if len(fpart) == 2:
+    fragment = fpart[1]
+  else:
+    fragment = ""
+
+  return fpart[0], fragment
+
+#end include urlparse.repy
+#begin include uniqueid.repy
+""" 
+Author: Justin Cappos
+
+Module: A simple library that provides a unique ID for each call
+
+Start date: November 11th, 2008
+
+This is a really, really simple module, only broken out to avoid duplicating 
+functionality.
+
+NOTE: This will give unique ids PER FILE.   If you have multiple python 
+modules that include this, they will have the potential to generate the
+same ID.
+
+"""
+
+# This is a list to prevent using part of the user's mycontext dict
+uniqueid_idlist = [0]
+uniqueid_idlock = getlock()
+
+def uniqueid_getid():
+  """
+   <Purpose>
+      Return a unique ID in a threadsafe way
+
+   <Arguments>
+      None
+
+   <Exceptions>
+      None
+
+   <Side Effects>
+      None.
+
+   <Returns>
+      The ID (an integer)
+  """
+
+  uniqueid_idlock.acquire()
+
+  # I'm using a list because I need a global, but don't want to use the 
+  # programmer's dict
+  myid = uniqueid_idlist[0]
+  uniqueid_idlist[0] = uniqueid_idlist[0] + 1
+
+  uniqueid_idlock.release()
+
+  return myid
+
+
+
+#end include uniqueid.repy
+#begin include sockettimeout.repy
+"""
+<Author>
+  Justin Cappos, Armon Dadgar
+  This is a rewrite of the previous version by Richard Jordan
+
+<Start Date>
+  26 Aug 2009
+
+<Description>
+  A library that causes sockets to timeout if a recv / send call would
+  block for more than an allotted amount of time.
+
+"""
+
+
+class SocketTimeoutError(Exception):
+  """The socket timed out before receiving a response"""
+
+
+class _timeout_socket():
+  """
+  <Purpose>
+    Provides a socket like object which supports custom timeouts
+    for send() and recv().
+  """
+
+  # Initialize with the socket object and a default timeout
+  def __init__(self,socket,timeout=10, checkintv=0.1):
+    """
+    <Purpose>
+      Initializes a timeout socket object.
+
+    <Arguments>
+      socket:
+              A socket like object to wrap. Must support send,recv,close, and willblock.
+
+      timeout:
+              The default timeout for send() and recv().
+
+      checkintv:
+              How often socket operations (send,recv) should check if
+              they can run. The smaller the interval the more time is
+              spent busy waiting.
+    """
+    # Store the socket, timeout and check interval
+    self.socket = socket
+    self.timeout = timeout
+    self.checkintv = checkintv
+
+
+  # Allow changing the default timeout
+  def settimeout(self,timeout=10):
+    """
+    <Purpose>
+      Allows changing the default timeout interval.
+
+    <Arguments>
+      timeout:
+              The new default timeout interval. Defaults to 10.
+              Use 0 for no timeout. Given in seconds.
+
+    """
+    # Update
+    self.timeout = timeout
+  
+  
+  # Wrap willblock
+  def willblock(self):
+    """
+    See socket.willblock()
+    """
+    return self.socket.willblock()
+
+
+  # Wrap close
+  def close(self):
+    """
+    See socket.close()
+    """
+    return self.socket.close()
+
+
+  # Provide a recv() implementation
+  def recv(self,bytes,timeout=None):
+    """
+    <Purpose>
+      Allows receiving data from the socket object with a custom timeout.
+
+    <Arguments>
+      bytes:
+          The maximum amount of bytes to read
+
+      timeout:
+          (Optional) Defaults to the value given at initialization, or by settimeout.
+          If provided, the socket operation will timeout after this amount of time (sec).
+          Use 0 for no timeout.
+
+    <Exceptions>
+      As with socket.recv(), socket.willblock(). Additionally, SocketTimeoutError is
+      raised if the operation times out.
+
+    <Returns>
+      The data received from the socket.
+    """
+    # Set the timeout if None
+    if timeout is None:
+      timeout = self.timeout
+
+    # Get the start time
+    starttime = getruntime()
+
+    # Block until we can read
+    rblock, wblock = self.socket.willblock()
+    while rblock:
+      # Check if we should break
+      if timeout > 0:
+        # Get the elapsed time
+        diff = getruntime() - starttime
+
+        # Raise an exception
+        if diff > timeout:
+          raise SocketTimeoutError,"recv() timed out!"
+
+      # Sleep
+      sleep(self.checkintv)
+
+      # Update rblock
+      rblock, wblock = self.socket.willblock()
+
+    # Do the recv
+    return self.socket.recv(bytes)
+
+
+  # Provide a send() implementation
+  def send(self,data,timeout=None):
+    """
+    <Purpose>
+      Allows sending data with the socket object with a custom timeout.
+
+    <Arguments>
+      data:
+          The data to send
+
+      timeout:
+          (Optional) Defaults to the value given at initialization, or by settimeout.
+          If provided, the socket operation will timeout after this amount of time (sec).
+          Use 0 for no timeout.
+
+    <Exceptions>
+      As with socket.send(), socket.willblock(). Additionally, SocketTimeoutError is
+      raised if the operation times out.
+
+    <Returns>
+      The number of bytes sent.
+    """
+    # Set the timeout if None
+    if timeout is None:
+      timeout = self.timeout
+
+    # Get the start time
+    starttime = getruntime()
+
+    # Block until we can write
+    rblock, wblock = self.socket.willblock()
+    while wblock:
+      # Check if we should break
+      if timeout > 0:
+        # Get the elapsed time
+        diff = getruntime() - starttime
+
+        # Raise an exception
+        if diff > timeout:
+          raise SocketTimeoutError,"send() timed out!"
+
+      # Sleep
+      sleep(self.checkintv)
+
+      # Update rblock
+      rblock, wblock = self.socket.willblock()
+
+    # Do the recv
+    return self.socket.send(data) 
+
+
+
+
+def timeout_openconn(desthost, destport, localip=None, localport=None, timeout=5):
+  """
+  <Purpose> 
+    Wrapper for openconn.   Very, very similar
+
+  <Args>
+    Same as Repy openconn
+
+  <Exception>
+    Raises the same exceptions as openconn.
+
+  <Side Effects>
+    Creates a socket object for the user
+
+  <Returns>
+    socket obj on success
+  """
+
+  realsocketlikeobject = openconn(desthost, destport, localip, localport, timeout)
+
+  thissocketlikeobject = _timeout_socket(realsocketlikeobject, timeout)
+  return thissocketlikeobject
+
+
+
+
+
+def timeout_waitforconn(localip, localport, function, timeout=5):
+  """
+  <Purpose> 
+    Wrapper for waitforconn.   Essentially does the same thing...
+
+  <Args>
+    Same as Repy waitforconn with the addition of a timeout argument.
+
+  <Exceptions> 
+    Same as Repy waitforconn
+
+  <Side Effects>
+    Sets up event listener which calls function on messages.
+
+  <Returns>
+    Handle to listener.
+  """
+
+  # We use a closure for the callback we pass to waitforconn so that we don't
+  # have to map mainch's to callback functions or deal with potential race
+  # conditions if we did maintain such a mapping. 
+  def _timeout_waitforconn_callback(localip, localport, sockobj, ch, mainch):
+    # 'timeout' is the free variable 'timeout' that was the argument to
+    #  timeout_waitforconn.
+    thissocketlikeobject = _timeout_socket(sockobj, timeout)
+
+    # 'function' is the free variable 'function' that was the argument to
+    #  timeout_waitforconn.
+    return function(localip, localport, thissocketlikeobject, ch, mainch)
+
+  return waitforconn(localip, localport, _timeout_waitforconn_callback)
+
+  
+  
+
+
+# a wrapper for stopcomm
+def timeout_stopcomm(commhandle):
+  """
+    Wrapper for stopcomm.   Does the same thing...
+  """
+
+  return stopcomm(commhandle)
+  
+    
+
+
+#end include sockettimeout.repy
+#begin include httpretrieve.repy
+"""
+<Program Name>
+  httpretrieve.repy
+
+<Started>
+  August 19, 2009
+
+<Authors>
+  Yafete Yemuru
+  Conrad Meyer
+  
+<Purpose>
+  Provides a method for retrieving content from web servers using the HTTP
+  protocol. The content can be accessed as a file like object, or saved to
+  a file or returned as a string.
+"""
+
+
+
+#begin include urlparse.repy
+#already included urlparse.repy
+#end include urlparse.repy
+#begin include sockettimeout.repy
+#already included sockettimeout.repy
+#end include sockettimeout.repy
+#begin include urllib.repy
+#already included urllib.repy
+#end include urllib.repy
+
+
+
+class HttpConnectionError(Exception):
+  """
+  Error indicating that the web server has unexpectedly dropped the
+  connection.
+  """
+
+
+
+
+class HttpBrokenServerError(Exception):
+  """
+  Error indicating that the web server has sent us complete garbage instead
+  of something resembling HTTP.
+  """
+
+
+
+
+def httpretrieve_open(url, querydata=None, postdata=None,\
+    httpheaders=None, proxy=None, timeout=None):
+  """
+  <Purpose>
+     Returns a file-like object that can be used to read the content from
+     an HTTP server. Follows 3xx redirects.
+
+  <Arguments>
+    url:
+           The URL to perform a GET or POST request on.
+    postdata (optional):
+           A dictionary of form data or a string to POST to the server.
+           Passing a non-None value results in a POST request being sent
+           to the server.
+    querydata (optional):
+           A dictionary of form data or a string to send as the query
+           string to the server.
+
+           If postdata is omitted, the URL is retrieved with GET. If
+           both postdata and querydata are omitted, there is no query
+           string sent in the request.
+
+           For both querydata and postdata, strings are sent *unmodified*.
+           This means you probably should encode them first, with
+           urllib_quote().
+    httpheaders (optional):
+           A dictionary of supplemental HTTP request headers to add to the
+           request.
+    proxy (optional):
+           A proxy server 2-tuple to bind to: ('host', port).       
+    timeout (optional):
+           A timeout for establishing a connection to the web server,
+           sending headers, and reading the response headers.
+
+           If excluded or None, never times out.
+
+  <Exceptions>
+    ValueError if given an invalid URL, or malformed limit or timeout
+      values. This is also raised if the user attempts to call a method
+      on the file-like object after closing it.
+
+    HttpConnectionError if opening the connection fails, or if the
+      connection is closed by the server before we expect.
+
+    SocketTimeoutError if the timeout is exceeded.
+
+    HttpBrokenServerError if the response or the Location response header
+      is malformed.
+
+  <Side Effects>
+    None
+
+  <Returns>
+    Returns a file-like object which can be used to read the body of
+    the response from the web server. The protocol version spoken by the
+    server, status code, and response headers are available as members of
+    the object.
+  """
+
+  starttimefloat = getruntime()
+
+  # Check if the URL is valid and get host, path, port and query
+  parsedurldict = urlparse_urlsplit(url)
+  hoststr = parsedurldict['hostname']
+  pathstr = parsedurldict['path']
+  portint = parsedurldict.get('port')
+  portint = portint or 80
+  
+  if parsedurldict['scheme'] != 'http':
+    raise ValueError("URL doesn't seem to be for the HTTP protocol.")
+  if hoststr is None:
+    raise ValueError("Missing hostname.")
+  if parsedurldict['query'] is not None and parsedurldict['query'] != "":
+    raise ValueError("URL cannot include a query string.")
+
+  # Typical HTTP sessions consist of (optionally, a series of pairs of) HTTP
+  # requests followed by HTTP responses. These happen serially.
+
+  # Open connection to the web server
+  print "HTTPOPEN START"
+  try:
+    if proxy is not None:
+      # if there is a proxy, open a connection with the proxy instead of the actual server
+      # use the timeout we are given (or none)
+      sockobj = timeout_openconn(proxy[0], proxy[1], timeout=timeout)  
+    else:
+      # if there is no proxy open a connection with server directly
+      # use the timeout we are given (or none)
+      sockobj = timeout_openconn(hoststr, portint, timeout=timeout)
+
+  except Exception, e:
+    # If a socket object was created, we want to clean in up.
+    if sockobj:
+      sockobj.close()
+
+    if repr(e).startswith("timeout("):
+      raise HttpConnectionError("Socket timed out connecting to host/port.")
+    raise
+  print "AFTER PROXY"
+  try:
+    # Builds the HTTP request:
+    httprequeststr = _httpretrieve_build_request(hoststr, portint, pathstr, \
+        querydata, postdata, httpheaders, proxy)
+
+    # Send the full HTTP request to the web server.
+    _httpretrieve_sendall(sockobj, httprequeststr)
+
+    # Now, we're done with the HTTP request part of the session, and we need
+    # to get the HTTP response.
+
+    # Check if we've timed out (if the user requested a timeout); update the
+    # socket timeout to reflect the time taken sending the request.
+    if timeout is None:
+      sockobj.settimeout(0)
+    elif getruntime() - starttimefloat >= timeout:
+      raise SocketTimeoutError("Timed out")
+    else:
+      sockobj.settimeout(timeout - (getruntime() - starttimefloat))
+    print "AFTER REQUESTSTR"
+    # Receive the header lines from the web server (a series of CRLF-terminated
+    # lines, terminated by an empty line, or by the server closing the
+    # connection.
+    headersstr = ""
+    while not headersstr.endswith("\r\n\r\n"):
+      try:
+        # This should probably be replaced with page-sized reads in the future,
+        # but for now, the behavior is at least correct.
+        headersstr += sockobj.recv(1)
+        
+      except Exception, e:
+        if str(e) == "Socket closed":
+          break
+        else:
+          raise
+    print "NEXT HEADERSTR: %s" % headersstr
+    httpheaderlist = headersstr.split("\r\n")
+    # Ignore (a) trailing blank line(s) (for example, the response header-
+    # terminating blank line).
+    while len(httpheaderlist) > 0 and httpheaderlist[-1] == "":
+      httpheaderlist = httpheaderlist[:-1]
+    print "AFTER HEADERLIST"
+    # Get the status code and status message from the HTTP response.
+    statuslinestr, httpheaderlist = httpheaderlist[0], httpheaderlist[1:]
+
+    # The status line should be in the form: "HTTP/1.X NNN SSSSS", where
+    # X is 0 or 1, NNN is a 3-digit status code, and SSSSS is a 'user-friendly'
+    # string representation of the status code (may contain spaces).
+    statuslinelist = statuslinestr.split(' ', 2)
+
+    if len(statuslinelist) < 3:
+      raise HttpBrokenServerError("Server returned garbage for HTTP " + \
+        "response (status line missing one or more fields).")
+
+    if not statuslinelist[0].startswith('HTTP'):
+      raise HttpBrokenServerError("Server returned garbage for HTTP " + \
+          "response (invalid response protocol in status line).")
+
+    friendlystatusstr = statuslinelist[2]
+    try:
+      statusint = int(statuslinelist[1])
+    except ValueError, e:
+      raise HttpBrokenServerError("Server returned garbage for HTTP " + \
+        "response (status code isn't integer).")
+
+    httpheaderdict = _httpretrieve_parse_responseheaders(httpheaderlist)
+    print "HEADERS: %s" % httpheaderdict
+    # If we got any sort of redirect response, follow the redirect. Note: we
+    # do *not* handle the 305 status code (use the proxy as specified in the
+    # Location header) at all; I think this is best handled at a higher layer
+    # anyway.
+    if statusint in (301, 302, 303, 307):
+      sockobj.close()
+      try:
+        redirecturlstr = httpheaderdict["Location"][0]
+      except (KeyError, IndexError), ke:
+        # When a server returns a redirect status code (3xx) but no Location
+        # header, some clients, e.g. Firefox, just show the response body
+        # as they would normally for a 2xx or 4xx response. So, I think we
+        # should ignore a missing Location header and just return the page
+        # to the caller.
+        pass
+      else:
+        # If the server did send a redirect location, let's go there.
+        parsedurldict = urlparse_urlsplit(redirecturlstr)
+        if parsedurldict['query'] is not None and parsedurldict['query'] != "":
+          return httpretrieve_open(redirecturlstr.split("?")[0], httpheaders={'Cookie' : httpheaderdict["Set-Cookie"]}, querydata=parsedurldict['query'])
+        else:
+          return httpretrieve_open(redirecturlstr, httpheaders={'Cookie' : httpheaderdict["Set-Cookie"]})
+
+    # If we weren't requested to redirect, and we didn't, return a read-only
+    # file-like object (representing the response body) to the caller.
+    return _httpretrieve_filelikeobject(sockobj, httpheaderdict, \
+        (statuslinelist[0], statusint, friendlystatusstr))
+  
+  except:
+    # If any exception occured after the socket was open, we want to make
+    # sure that the socket is cleaned up if it is still open before we
+    # raise the exception.
+    if sockobj:
+      sockobj.close()
+
+    raise
+
+
+
+def httpretrieve_save_file(url, filename, querydata=None, postdata=None, \
+    httpheaders=None, proxy=None, timeout=None):
+  """
+  <Purpose>
+    Perform an HTTP request, and save the content of the response to a
+    file.
+
+  <Arguments>
+    filename:
+           The file name to save the response to.
+    Other arguments:
+           See documentation for httpretrieve_open().
+
+  <Exceptions>
+    This function will raise any exception raised by Repy file objects
+    in opening, writing to, and closing the file.
+
+    This function will all also raise any exception raised by
+    httpretrieve_open(), for the same reasons.
+
+  <Side Effects>
+    Writes the body of the response to 'filename'.
+
+  <Returns>
+    None
+  """
+
+  # Open the output file object and http file-like object.
+  outfileobj = open(filename, 'w')
+  httpobj = httpretrieve_open(url, querydata=querydata, postdata=postdata, \
+      httpheaders=httpheaders, proxy=proxy, timeout=timeout)
+
+  # Repeatedly read from the file-like HTTP object into our file, until the
+  # response is finished.
+  responsechunkstr = None
+  while responsechunkstr != '':
+    responsechunkstr = httpobj.read(4096)
+    outfileobj.write(responsechunkstr)
+
+  outfileobj.close()
+  httpobj.close()
+
+
+
+
+def httpretrieve_get_string(url, querydata=None, postdata=None, \
+    httpheaders=None, proxy=None, timeout=30):
+  """
+  <Purpose>
+    Performs an HTTP request on the given URL, using POST or GET,
+    returning the content of the response as a string. Uses
+    httpretrieve_open.
+
+  <Arguments>
+    See httpretrieve_open.
+
+  <Exceptions>
+    See httpretrieve_open.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    Returns the body of the HTTP response (no headers).
+  """
+
+  # Open a read-only file-like object for the HTTP request.
+  httpobj = httpretrieve_open(url, querydata=querydata, postdata=postdata, \
+      httpheaders=httpheaders, proxy=proxy, timeout=timeout)
+
+  # Read all of the response and return it.
+  try:
+    return httpobj.read()
+  finally:
+    httpobj.close()
+
+
+
+
+class _httpretrieve_filelikeobject:
+  # This class implements a file-like object used for performing HTTP
+  # requests and retrieving responses.
+
+  def __init__(self, sock, headers, httpstatus):
+    # The socket-like object connected to the HTTP server. Headers have
+    # already been read.
+    self._sockobj = sock
+
+    # If this is set, the close() method has already been called, so we
+    # don't accept future reads.
+    self._fileobjclosed = False
+
+    # This flag is set if we've finished recieving the entire response
+    # from the server.
+    self._totalcontentisreceived = False
+
+    # This integer represents the number of bytes read so far.
+    self._totalread = 0
+
+    # This is the dictionary of HTTP response headers associated with this
+    # file-like object.
+    self.headers = headers
+
+    # The HTTP status tuple of this response, e.g. ("HTTP/1.0", 200, "OK")
+    self.httpstatus = httpstatus
+
+
+
+  def read(self, limit=None, timeout=None):
+    """
+    <Purpose>
+      Behaves like Python's file.read(), with the potential to raise
+      additional informative exceptions.
+
+    <Arguments>
+      limit (optional):
+            The maximum amount of data to read. If omitted or None, this
+            reads all available data.
+
+    <Exceptions>
+      See file.read()'s documentation, as well as that of
+      httpretrieve_open().
+
+    <Side Effects>
+      None.
+
+    <Returns>
+      See file.read().
+    """
+
+    # Raise an error if the caller has already close()d this object.
+    if self._fileobjclosed:
+      raise ValueError("I/O operation on closed file")
+
+    # If we've finished reading everything we can from the server, return the
+    # empty string.
+    if self._totalcontentisreceived:
+      return ''
+
+    lefttoread = None
+    if limit is not None:
+      lefttoread = limit
+
+      # Sanity check type/value of limit.
+      if type(limit) is not int:
+        raise TypeError("Expected an integer or None for read() limit")
+      elif limit < 0:
+        raise ValueError("Expected a non-negative integer for read() limit")
+
+    if timeout is None:
+      self._sockobj.settimeout(0)
+    else:
+      self._sockobj.settimeout(timeout)
+
+    # Try to read up to limit, or until there is nothing left.
+    httpcontentstr = ''
+    while True:
+      try:
+        contentchunkstr = self._sockobj.recv(lefttoread or 4096)
+      except Exception, e:
+        if str(e) == "Socket closed":
+          self._totalcontentisreceived = True
+          break
+        else:
+          raise
+      
+      httpcontentstr += contentchunkstr
+      self._totalread += len(contentchunkstr)
+      if limit is not None:
+        if len(contentchunkstr) == lefttoread:
+          break
+        else:
+          lefttoread -= len(contentchunkstr)
+      if contentchunkstr == "":
+        self._totalcontentisreceived = True
+        break
+
+    return httpcontentstr
+
+
+
+  def close(self):
+    """
+    <Purpose>
+      Close the file-like object.
+
+    <Arguments>
+      None
+
+    <Exceptions>
+      None
+
+    <Side Effects>
+      Disconnects from the HTTP server.
+
+    <Returns>
+      Nothing
+    """
+    self._fileobjclosed = True
+    self._sockobj.close()
+
+
+
+
+def _httpserver_put_in_headerdict(res, lastheader, lastheader_str):
+  # Helper function that tries to put the header into a dictionary of lists,
+  # 'res'.
+  if lastheader is not None:
+    if lastheader not in res:
+      res[lastheader] = []
+    res[lastheader].append(lastheader_str.strip())
+
+
+
+
+def _httpretrieve_parse_responseheaders(headerlines):
+  # Parse rfc822-style headers (this could be abstracted out to an rfc822
+  # library that would be quite useful for internet protocols). Returns
+  # a dictionary mapping headers to arrays of values. E.g.:
+  #
+  # Foo: a
+  # Bar:
+  #   b
+  # Bar: c
+  #
+  # Becomes: {"Foo": ["a"], "Bar": ["b", "c"]}
+
+  # These variables represent the key and value of the last header we found,
+  # unless we are parsing the very first header. E.g., if we've just read:
+  #   Content-Type: text/html
+  # Then, lastheaderkeystr == "Content-Type",
+  # lastheadervaluestr == "text/html"
+
+  lastheaderkeystr = None
+  lastheadervaluestr = ""
+
+  resdict = {}
+  
+  if len(headerlines) == 0:
+    return {}
+
+  try:
+    # Iterate over the request header lines:
+    for i in range(len(headerlines)):
+      # Lines with leading non-CRLF whitespace characters are part of the
+      # previous line (see rfc822 for details).
+      if headerlines[i][0] in (" ", "\t") and lastheaderkeystr is not None:
+        lastheadervaluestr += headerlines[i]
+      else:
+        _httpserver_put_in_headerdict(resdict, lastheaderkeystr, lastheadervaluestr)
+        lastheaderkeystr, lastheadervaluestr = headerlines[i].split(":", 1)
+
+    # Add the last line to the result dictionary.
+    _httpserver_put_in_headerdict(resdict, lastheaderkeystr, lastheadervaluestr)
+
+    return resdict
+
+  except IndexError, idx:
+    raise HttpBrokenServerError("Server returned garbage for HTTP" + \
+        " response. Bad headers.")
+
+
+
+
+def _httpretrieve_build_request(host, port, path, querydata, postdata, \
+    httpheaders, proxy):
+  # Builds an HTTP request from these parameters, returning it as
+  # a string.
+
+  # Sanity checks:
+  if path == "":
+    raise ValueError("Invalid path -- empty string.")
+  if postdata is not None and type(postdata) not in (str, dict):
+    raise TypeError("Postdata should be a dict of form-data or a string")
+  if querydata is not None and type(querydata) not in (str, dict):
+    raise TypeError("Querydata should be a dict of form-data or a string")
+  if httpheaders is not None and type(httpheaders) is not dict:
+    raise TypeError("Expected HTTP headers as a dictionary.")
+
+  # Type-conversions:
+  if type(querydata) is dict:
+    querydata = urllib_quote_parameters(querydata)
+  elif querydata is None:
+    querydata = ""
+
+  if type(postdata) is dict:
+    postdata = urllib_quote_parameters(postdata)
+
+  # Default to GET, unless the caller specifies a message body to send.
+  methodstr = "GET"
+  if postdata is not None:
+    methodstr = "POST"
+
+  # Encode the path and querystring part of the request.
+  resourcestr = querydata
+  if querydata != "":
+    resourcestr = "?" + resourcestr
+
+  # Encode the HTTP request line and headers:
+  if proxy is not None:
+    # proxy exists thus the request header should include the original requested url  
+    requeststr = methodstr + ' http://' + host + ':' + str(port) + path + resourcestr + ' HTTP/1.0\r\n'
+  else:
+    # there is no proxy; send normal http request   
+    requeststr = methodstr + ' ' + path + resourcestr + ' HTTP/1.0\r\n'
+    
+  if httpheaders is not None:
+    # Most servers require a 'Host' header for normal functionality
+    # (especially in the case of multiple domains being hosted on a
+    # single server).
+    if "Host" not in httpheaders:
+      requeststr += "Host: " + host + ':' + str(port) + "\r\n"
+    print "Httpheaders: %s" % httpheaders
+    for key, val in httpheaders.items():
+      if key == 'Cookie':
+        print 'COOKIE: %s' % val
+        for cookie in val:
+          requeststr += key + ": " + cookie + '\r\n'
+      else:
+        requeststr += key + ": " + val + '\r\n'
+
+  # Affix post-data related headers and content:
+  if methodstr == "POST":
+    requeststr += 'Content-Length: ' + str(len(postdata)) + '\r\n'
+
+  # The empty line terminates HTTP headers.
+  requeststr += '\r\n'
+
+  # If we're a POST request, affix any requested data to the message body.
+  if methodstr == "POST":
+    requeststr += postdata
+
+  return requeststr
+
+
+
+
+def _httpretrieve_sendall(sockobj, datastr):
+  # Helper function that attempts to dump all of the data in datastr to the
+  # socket sockobj (data is any arbitrary bytes).
+  while len(datastr) > 0:
+    datastr = datastr[sockobj.send(datastr):]
+
+#end include httpretrieve.repy
+
+
+
+
+class _httpserver_ClientClosedSockEarly(Exception):
+  # Raised internally when the client unexpectedly closes the socket. The
+  # correct behavior in this instance is to clean up that handler and
+  # continue.
+  pass
+
+
+
+
+class _httpserver_BadRequest(Exception):
+  # Raised internally when the client's request is malformed.
+  pass
+
+
+
+
+class _httpserver_ServerError(Exception):
+  # Raised internally when the callback function unexpectedly raises an
+  # exception.
+  pass
+
+
+
+
+class _httpserver_BadTransferCoding(Exception):
+  # Raised internally when the request's encoding is something we can't
+  # handle (most everything at the time of writing).
+  pass
+
+
+
+
+# This global dictionary is used to keep track of open HTTP callbacks.
+# The 'lock' entry is used to serialize changes to the other entries.
+# The 'handles' dictionary maps numeric ids we hand out in
+# httpserver_registercallback() and take in httpserver_stopcallback()
+# to ids returned and used by waitforconn(). The 'cbfuncs' entry
+# maps httpserver numeric ids to the callback function associated
+# with them.
+_httpserver_context = {
+    'handles': {},
+    'cbfuncs': {},
+    'lock': getlock()}
+
+
+
+def httpserver_registercallback(addresstuple, cbfunc):
+  """
+  <Purpose>
+    Registers a callback function on the (host, port).
+
+  <Arguments>
+    addresstuple:
+      An address 2-tuple to bind to: ('host', port).
+
+    cbfunc:
+      The callback function to process requests. It takes one argument,
+      which is a dictionary describing the HTTP request. It looks like
+      this (just an example):
+        {
+          'verb': 'HEAD',
+          'path': '/',
+          'querystr': 'foo=bar&baz',
+          'querydict': { 'foo': 'bar', 'baz': None }
+          'version': '0.9',
+          'datastream': object with a file-like read() method,
+          'headers': { 'Content-Type': 'application/x-xmlrpc-data'},
+          'httpdid': 17,
+          'remoteipstr': '10.0.0.4',
+          'remoteportnum': 54001
+        }
+      ('datastream' is a stream of any HTTP message body data sent by the
+      client.)
+
+      It is expected that this callback function returns a dictionary of:
+        {
+          'version': '0.9' or '1.0' or '1.1',
+          'statuscode': any integer from 100 to 599,
+          'statusmsg' (optional): an arbitrary string without newlines,
+          'headers': { 'X-Header-Foo': 'Bar' },
+          'message': arbitrary string
+        }
+
+  <Exceptions>
+    TypeError, ValueError, KeyError, IndexError if arguments to this
+    function are malformed.
+
+    Raises any exception waitforconn() will raise if the (hostname, port)
+    tuple is restricted, already taken, etc.
+
+  <Side Effects>
+    Starts a listener on the given host and port.
+
+  <Returns>
+    A handle for the listener (an httpdid). This can be used to stop the
+    server.
+
+  """
+
+  _httpserver_context['lock'].acquire()
+
+  try:
+    newhttpdid = uniqueid_getid()
+
+    # Keep track of this server's id in a closure:
+    def _httpserver_cbclosure(remoteip, remoteport, sock, ch, listench):
+      # Do the actual processing on the request.
+      _httpserver_socketcb(remoteip, remoteport, sock, ch, listench, \
+          newhttpdid)
+
+      # Close the socket afterwards.
+      try:
+        sock.close()
+      except Exception, e:
+        if "socket" not in str(e).lower():
+          raise
+        pass    # Best effort.
+
+
+    _httpserver_context['handles'][newhttpdid] = \
+        waitforconn(addresstuple[0], addresstuple[1], _httpserver_cbclosure)
+    _httpserver_context['cbfuncs'][newhttpdid] = cbfunc
+
+    return newhttpdid
+  finally:
+    _httpserver_context['lock'].release()
+
+
+
+
+def _httpserver_socketcb(remoteip, remoteport, sock, ch, listench, httpdid):
+  # This function gets invoked each time a client connects to our socket.
+
+  # It proceeds in a loop -- reading in requests, handing them off to the
+  # callback function, and sending the result to the client. If errors are
+  # encountered, it sends an error message (we choose HTTP/1.0 for
+  # compatibility and because we don't always know what version the client
+  # wants) and closes the connection. Additionally, if the response
+  # generated by the callback requests protocol version 0.9 or 1.0, or is
+  # 1.1 but includes the Connection: close header, the connection is closed
+  # and the loop broken.
+
+  _httpserver_context['lock'].acquire()
+  try:
+    cbfunc = _httpserver_context['cbfuncs'][httpdid]
+  finally:
+    _httpserver_context['lock'].release()
+
+  extradata = ""
+
+  # HTTP/1.0 and HTTP/1.1 Connection: close requests break out of this
+  # loop immediately; HTTP/1.1 clients can keep sending requests and
+  # receiving responses in this loop indefinitely.
+  while True:
+    try:
+      # Reads request headers, parses them, lets callback handle headers
+      # and possible request body, sends the response that the callback
+      # function tells it to send. On error, may raise one of many
+      # exceptions, which we deal with here:
+      closeconn, extradata = \
+          _httpserver_process_single_request(sock, cbfunc, extradata, \
+          httpdid, remoteip, remoteport)
+
+      if closeconn:
+        break
+
+    except _httpserver_BadRequest, br:
+      # There was some sort of flaw in the client's request.
+      response = "HTTP/1.0 400 Bad Request\r\n" + \
+          "Content-Type: text/plain\r\n\r\n" + str(br) + "\r\n"
+      _httpserver_sendAll(sock, response, besteffort=True)
+      break
+    
+    except _httpserver_ServerError, se:
+      # The callback function raised an exception or returned some object
+      # we didn't expect.
+      response = "HTTP/1.0 500 Internal Server Error\r\n" + \
+          "Content-Type: text/plain\r\n\r\n" + str(se) + "\r\n"
+      _httpserver_sendAll(sock, response, besteffort=True)
+      break
+    
+    except _httpserver_BadTransferCoding, bte:
+      # The HTTP/1.1 client sent us something with a Transport-Encoding we
+      # can't handle.
+      response = "HTTP/1.1 501 Not Implemented\r\n" + \
+          ("Content-Length: %d\r\n" % (len(str(bte)) + 2)) + \
+          "Connection: close\r\n" + \
+          "Content-Type: text/plain\r\n\r\n" + str(bte) + "\r\n"
+      _httpserver_sendAll(sock, response, besteffort=True)
+      break
+
+    except _httpserver_ClientClosedSockEarly:
+      # Not much else we can do.
+      break
+    
+    except Exception, e:
+      if "Socket closed" in str(e):
+        break
+
+      # We shouldn't encounter these, other than 'Socket closed' ones. They
+      # represent a bug in our code somewhere. However, not raising the
+      # exception makes HTTP server software incredibly unintuitive to
+      # debug.
+      raise
+
+
+
+
+def _httpserver_readHTTPheader(sock, data):
+  # Reads data from the socket in 4k chunks, replacing \r\n newlines with
+  # \n newlines. When it encounters a (decoded) \n\n sequence, it returns
+  # (data_before, data_after).
+
+  headers = []
+  command = True
+  while True:
+    line, data = _httpserver_getline(sock, data)
+    if len(line) == 0:
+      raise _httpserver_ClientClosedSockEarly()
+
+    # Be a well-behaved server, and handle normal newlines and telnet-style
+    # newlines in the same fashion.
+    line = line.rstrip("\r")
+    if command:
+      splitln = line.split(" ")
+      if len(splitln) != 3:
+        raise _httpserver_BadRequest("HTTP/0.9 or malformed request.")
+      if not splitln[2].lower().startswith("http/1."):
+        raise _httpserver_BadRequest("Malformed request.")
+      command = False
+
+    if len(line) == 0:
+      break
+
+    headers.append(line)
+
+  return (headers, data)
+
+
+
+
+def _httpserver_parseHTTPheader(headerdatalist):
+  lineslist = headerdatalist
+  commandstr = lineslist[0]
+  otherheaderslist = lineslist[1:]
+
+  infodict = {}
+
+  verbstr, rawpathstr, versionstr = commandstr.split(" ", 2)
+  
+  infodict['verb'] = verbstr
+
+  if len(versionstr) != len("HTTP/1.1"):
+    raise _httpserver_BadRequest("Bad HTTP command")
+  versionstr = versionstr.upper()
+  if versionstr == "HTTP/1.0":
+    infodict['version'] = '1.0'
+  elif versionstr == "HTTP/1.1":
+    infodict['version'] = '1.1'
+  else:
+    raise _httpserver_BadRequest("Unrecognized HTTP version")
+
+  if rawpathstr.find("?") != -1:
+    infodict['path'], infodict['querystr'] = rawpathstr.split("?", 1)
+  else:
+    infodict['path'] = rawpathstr
+    infodict['querystr'] = None
+
+  try:
+    infodict['headers'] = _httpretrieve_parse_responseheaders(otherheaderslist)
+  except HttpBrokenServerError:
+    raise _httpserver_BadRequest("Request headers are misformed.")
+
+  try:
+    infodict['querydict'] = urllib_unquote_parameters(infodict['querystr'])
+  except (ValueError, AttributeError, TypeError):
+    infodict['querydict'] = None
+
+  return infodict
+    
+
+
+
+
+def _httpserver_sendAll(sock, datastr, besteffort=False):
+  # Sends all the data in datastr to sock. If besteffort is True,
+  # we don't care if it fails or not.
+  try:
+    while len(datastr) > 0:
+      datastr = datastr[sock.send(datastr):]
+  except Exception, e:
+    if "socket" not in str(e).lower():
+      raise
+
+    # If the caller didn't want this function to raise an exception for
+    # any reason, we don't, and instead return silently. If they are ok
+    # with exceptions, we re-raise.
+    if not besteffort:
+      raise
+
+
+
+
+def _httpserver_getline(sock, datastr):
+  # Reads a line out of datastr (if possible), or failing that, gets more from
+  # the socket. Returns (line, extra).
+
+  try:
+    newdatastr = ""
+    while True:
+      endloc = datastr.find("\n", -len(newdatastr))
+      if endloc != -1:
+        return (datastr[:endloc], datastr[endloc+1:])
+      newdatastr = sock.recv(4096)
+      datastr += newdatastr
+  except Exception, e:
+    if "Socket closed" in str(e) and len(datastr) != 0:
+      return (datastr, "")
+    raise
+
+
+
+
+def _httpserver_getblock(blocksize, sock, datastr):
+  # Reads a block of size blocksize out of datastr (if possible), or failing
+  # that, gets more from the socket. Returns (block, extra).
+
+  try:
+    while len(datastr) < blocksize:
+      datastr += sock.recv(4096)
+
+    return (datastr[:blocksize], datastr[blocksize:])
+  except Exception, e:
+    if "Socket closed" in str(e) and len(datastr) != 0:
+      return (datastr, "")
+    raise
+
+
+
+
+def httpserver_stopcallback(callbackid):
+  """
+  <Purpose>
+    Removes an existing callback function.
+
+  <Arguments>
+    callbackid:
+      The id returned by httpserver_registercallback().
+
+  <Exceptions>
+    IndexError, KeyError if the id is invalid or has already been deleted.
+
+  <Side Effects>
+    Removes this listener from the registry, deletes the listening socket.
+
+  <Returns>
+    Nothing.
+
+  """
+  _httpserver_context['lock'].acquire()
+  try:
+    stopcomm(_httpserver_context['handles'][callbackid])
+    del _httpserver_context['handles'][callbackid]
+    del _httpserver_context['cbfuncs'][callbackid]
+  finally:
+    _httpserver_context['lock'].release()
+
+
+
+
+class _httpserver_bodystream:
+  """
+  _httpserver_bodystream is a helper class passed as the 'datastream' entry
+  in the dictionary sent to user callback functions. It has a read() method
+  that behaves very similarly to file.read(). Other than that, this object
+  is nothing like Python's file.
+
+  """
+
+  # Reads the rest of the HTTP request from the socket, erroring
+  # appropriately. Understands transfer-coding. Returns chunks
+  # at a time.
+
+  def __init__(self, sock, data, verb, headers):
+    # The socket object for communicating with the client:
+    self._sock = sock
+    # And any data we have already read off the socket, but has not been
+    # consumed (we read data in 4 kilobyte chunks and keep the extra
+    # around for later use).
+    self._rawdata = data
+
+    # The HTTP request verb (GET, POST, etc); a string.
+    self._verb = verb
+
+    # A dictionary of the client's request headers, as parsed by
+    # _httpretrieve_parse_responseheaders() (this is a function which
+    # should be moved elsewhere; for example, an http_common.repy
+    # library would work).
+    self._headers = headers
+
+    # The number of bytes left in the current chunk, if the client's
+    # request body is transfer-encoded (integer, or None), or the
+    # number of bytes in the entire request body if it is not transfer-
+    # encoded.
+    self._leftinchunk = None
+
+    # Whether or not the client's request body was transfer-encoded.
+    self._chunked = False
+
+    # A flag set when we know we have finished reading the current
+    # request body, so we can return the empty string.
+    self._done = False
+
+    # A lock used to serialize reads from this file-like object.
+    self._lock = getlock()
+
+    # A flag set when we are finished reading HTTP "trailers". Only applies
+    # to client requests sent with chunked transfer-encoding.
+    self._trailersread = False
+
+    # For chunked transfers only: Keep a queue of unconsumed but decoded
+    # data (string).
+    self._data = ""
+
+
+    # Deal with methods that cannot send a message body:
+    if verb in ("GET", "HEAD", "TRACE", "DELETE"):
+      if "Content-Length" in headers or \
+          "Transfer-Encoding" in headers:
+        raise _httpserver_BadRequest("Method '" + verb + \
+            "' cannot send an entity-body and therefore a " + \
+            "Content-Length or Transfer-Encoding header is invalid.")
+      else:
+        self._done = True
+        return
+
+    # Deal with methods that send a message body.
+    if "Content-Length" not in headers and "Transfer-Encoding" not in headers:
+      raise _httpserver_BadRequest("Method '" + str(verb) + \
+          "' can send an entity-body and requires a Content-Length " + \
+          "or Transfer-Encoding header.")
+
+    if "Transfer-Encoding" in headers:
+      # Decode Transfer-coded messages
+      if len(headers["Transfer-Encoding"]) != 1:
+        raise _httpserver_BadRequest("Multiple Transfer-Encoding headers " + \
+            "is unacceptable.")
+
+      # "chunked" must be in the codings list, and it must be last.
+      codings = headers["Transfer-Encoding"][0].split(",")
+      codings.reverse()
+
+      realcodings = []
+
+      # Strip 'identity' codings.
+      for coding in codings:
+        coding = coding.strip().lower()
+        token = coding.split(None, 1)
+        if token != "identity":
+          realcodings.append(coding)
+      
+      if len(realcodings) > 1 or realcodings[0] != "chunked":
+        raise _httpserver_BadTransferCoding("Cannot handle any transfer-" + \
+            "codings other than chunked.")
+
+      self._chunked = True
+
+    else:
+      # If we get here, that means we have a Content-Length and no Transfer-
+      # Encoding, so we can read the message body directly.
+      msglen = headers["Content-Length"]
+
+      if len(msglen) != 1:
+        raise _httpserver_BadRequest("Multiple Content-Length headers is " + \
+            "unacceptable.")
+      
+      self._leftinchunk = int(msglen[0])
+
+
+
+  def read(self, size=None):
+    """
+    <Purpose>
+      Read a sequence of bytes from an HTTP request body.
+
+    <Arguments>
+      size (optional):
+        An upper limit on the number of bytes to return.
+
+    <Exceptions>
+      Any raised by socket.read().
+
+    <Side Effects>
+      Possibly reads more from the socket that the HTTP request is passed
+      on.
+
+    <Returns>
+      A string of bytes comprising part of the HTTP message body. Does not
+      include any chunked encoding trailers.
+
+    """
+
+    self._lock.acquire()  # Serialize file-like object reads.
+
+    # Keep the same API as file(), but use a more understandable variable
+    # name through this method.
+    requestsize = size
+
+    # The following 'Try' block is used to always unlock self._lock, no
+    # matter how we return up the stack:
+    try:
+      # If we already know we are finished, simply return the empty string.
+      if self._done:
+        return ""
+
+      if requestsize == 0:
+        return ""
+
+      # If the client's request was not chunked, but instead they specified
+      # the Content-length header:
+      if not self._chunked:
+        # toyieldstr is the string we will return to the user this time,
+        # as if this were a python generator (which is a nice way to think
+        # about it). We determine the amount to return, toyieldlen:
+        toyieldlen = self._leftinchunk
+        if requestsize is not None:
+          toyieldlen = min(requestsize, toyieldlen)
+
+        # And strive to return as much of it as possible:
+        toyieldstr, self._rawdata = _httpserver_getblock(toyieldlen, \
+            self._sock, self._rawdata)
+        self._leftinchunk -= len(toyieldstr)
+
+        # If there is nothing left in the request, we're done; keep a note
+        # for future read() calls.
+        if self._leftinchunk == 0:
+          self._done = True
+
+        return toyieldstr
+
+      # If the client's request was chunked:
+      else:
+        # Read until there isn't anymore, OR until we have enough to satisfy
+        # the user's request.
+        while requestsize is None or len(self._data) < requestsize:
+          # If we have more raw bytes to read from the socket before
+          # reaching the end of this chunk:
+          if self._leftinchunk > 0:
+            # Determine how many bytes to (attempt to) read from the client:
+            nextblocksize = self._leftinchunk
+            if requestsize is not None:
+              nextblocksize = min(self._leftinchunk, requestsize)
+
+            # Try and request the rest of the chunk, or as much as is
+            # needed to fulfill the caller's request.
+            chunkstr, self._rawdata = _httpserver_getblock(nextblocksize, self._sock, \
+                self._rawdata)
+            self._leftinchunk -= len(chunkstr)
+            self._data += chunkstr
+
+            # We stop trying if we can't get as much data as we wanted to,
+            # because this means that the client has closed the socket.
+            if len(chunkstr) < nextblocksize:
+              break
+
+          # We are finished with this chunk; now we must determine if there
+          # is another chunk, and what its length is.
+          else:
+            # HTTP chunks have "\r\n" appended to the end of them; if we
+            # just finished reading a chunk, read off the trailing "\r\n"
+            # and discard it.
+            if self._leftinchunk is not None:
+              _, self._rawdata = _httpserver_getblock(2, self._sock, \
+                  self._rawdata)
+            
+            # Read the next chunk's size information:
+            line, self._rawdata = _httpserver_getline(self._sock, \
+                self._rawdata)
+
+            # Remove optional chunk extensions (";" -> newline) that we don't
+            # understand (this is advised by the HTTP 1.1 RFC), and read the
+            # hex chunk size:
+            self._leftinchunk = int(line.split(";", 1)[0].strip(), 16)
+
+            # A chunk size of '0' indicates the end of a chunked message:
+            if self._leftinchunk == 0:
+              self._done = True
+              break
+
+        # Determine how much data we should return, and how much we should
+        # keep around for the next read.
+        retlen = len(self._data)
+        if requestsize is not None:
+          retlen = min(requestsize, retlen)
+
+        retval, self._data = self._data[:retlen], self._data[retlen:]
+        return retval
+
+    finally:
+      self._lock.release()
+
+
+
+  def get_trailers(self):
+    """
+    <Purpose>
+      Read any 'trailers' sent by the client. The caller does not need to
+      ensure that the entire message body has been read first, though they
+      should be aware that calling this method consumes any remaining
+      message body and immediately forgets it.
+
+      Note: not multithread safe, not multi-call safe (calls after the
+      first call will simply return the empty dictionary).
+
+    <Arguments>
+      None.
+
+    <Exceptions>
+      Any raised by socket.read().
+
+    <Side Effects>
+      Possibly reads more from the socket that the HTTP request is passed
+      on.
+
+    <Returns>
+      A dictionary of headers in the same style as
+      _httpretrieve_parse_responseheaders().
+
+    """
+    # Reads the rest of the message, and then reads and returns any trailer
+    # headers (only sent in chunked messages).
+
+    # Discard extra message without filling RAM. No-op if the user function
+    # has already read the entire stream.
+    while True:
+      unuseddatastr = self.read(4096)
+      if len(unuseddatastr) == 0:
+        break
+
+    if not self._chunked:
+      return {}
+
+    if self._trailersread:
+      return {}
+
+    trailers = {}
+
+    # Read 'trailer' headers.
+    while True:
+      line, self._rawdata = _httpserver_getline(self._sock, self._rawdata)
+
+      # Empty line? Then the trailers are done.
+      if len(line.strip("\r")) == 0:
+        break
+
+      # Check for a multi-line header by peeking ahead:
+      while True:
+        nextchar, self._rawdata = _httpserver_getblock(1, self._sock, \
+            self._rawdata)
+        self._rawdata = nextchar + self._rawdata
+        if nextchar in (" ", "\t"):
+          line2, self._rawdata = _httpserver_getline(self._sock, self._rawdata)
+          line += " " + line2.lstrip()
+        else:
+          break
+
+      # Insert header into existing headers
+      hdrname, hdrval = line.split(":", 1)
+      if hdrname not in trailers:
+        trailers[hdrname] = []
+      trailers[hdrname].append(hdrval.strip())
+
+    self._trailersread = True
+    return trailers
+
+
+
+
+  def _get_extra(self):
+    # Private function of httpserver, *should not be used by callback
+    # functions*! NOT parallel-safe, NOT meant to be called more than
+    # once.
+
+    # Read the socket up to (at least) the end of the current message;
+    # if we read beyond the end of our message, return any extra.
+    
+    # Discard extra message without filling RAM
+    while True:
+      if len(self.read(4096)) == 0:
+        break
+
+    # Discard trailers, if any are left:
+    if self._chunked:
+      self.get_trailers()
+
+    rawdata = self._rawdata
+    self._rawdata = ""
+
+    return rawdata
+
+
+
+
+class _httpserver_StringIO:
+  # Implements a read-only file-like object encapsulating a string.
+  def __init__(self, string):
+    self._data = string
+    self._closed = False
+
+
+
+  def read(self, limit=None):
+    if limit is None:
+      limit = 4096
+
+    if self._closed:
+      raise ValueError("Trying to read from a closed StringIO object.")
+
+    res, self._data = self._data[:limit], self._data[limit:]
+    return res
+
+
+
+  def close(self):
+    if self._closed:
+      raise ValueError("Trying to close a closed StringIO object.")
+    self._closed = True
+
+
+
+
+def _httpserver_sendfile(sock, filelikeobj):
+  # Attempts to forward all of the data from filelikeobj to sock.
+  while True:
+    chunk = filelikeobj.read(4096)
+    if len(chunk) == 0:
+      break
+    _httpserver_sendAll(sock, chunk, besteffort=True)
+
+
+
+
+def _httpserver_sendfile_chunked(sock, filelikeobj):
+  # Attempts to forward all of the data from filelikeobj to sock, using chunked
+  # encoding.
+  totallen = 0
+  while True:
+    chunk = filelikeobj.read(4096)
+    if len(chunk) == 0:
+      break
+    # encode as HTTP/1.1 chunks:
+    totallen += len(chunk)
+    chunk = "%X\r\n%s\r\n" % (len(chunk), chunk)
+    _httpserver_sendAll(sock, chunk)
+
+  lastchunk = "0\r\n"
+  lastchunk += ("Content-Length: %d\r\n" % totallen)
+  lastchunk += "\r\n"
+  _httpserver_sendAll(sock, lastchunk)
+
+
+
+
+def _httpserver_process_single_request(sock, cbfunc, extradata, httpdid, \
+    remoteip, remoteport):
+  # This function processes a single request in from sock, and either
+  # puts a response to the socket and returns, or raises an exception.
+
+  # Read HTTP request off the socket
+  headerdata, extradata = _httpserver_readHTTPheader(sock, extradata)
+
+  # Interpret the header.
+  reqinfo = _httpserver_parseHTTPheader(headerdata)
+
+  # Wrap the (possibly) remaining data into a file-like object.
+  messagebodystream = _httpserver_bodystream(sock, \
+      extradata, reqinfo['verb'], reqinfo['headers'])
+  reqinfo['datastream'] = messagebodystream
+  reqinfo['httpdid'] = httpdid
+  reqinfo['remoteipstr'] = remoteip
+  reqinfo['remoteportnum'] = remoteport
+
+  # By default, we don't want to close the connection. (Though, nearly
+  # every case will change this to True -- only HTTP/1.1 sockets
+  # that don't set Connection: close will keep this False.)
+  closeconn = False
+
+  # Send request information to callback.
+  try:
+    result = cbfunc(reqinfo)
+
+  except Exception, e:
+    raise _httpserver_ServerError("httpserver: Callback function " + \
+        "raised an exception: " + str(e))
+
+  # Get any extra data consumed from sock by the message body stream object,
+  # but that was not actually part of the message body.
+  extradata = messagebodystream._get_extra()
+
+  # Interpret result of callback function
+  try:
+    version = result['version']
+    statuscode = result['statuscode']
+    statusmsg = result['statusmsg']
+    headers = result['headers']
+    messagestream = result['message']
+  except (KeyError, TypeError):
+    raise _httpserver_ServerError("httpserver: Callback function " + \
+        "returned malformed dictionary")
+
+  # Do some basic sanity checks:
+  if None in (version, statuscode, statusmsg, headers, messagestream):
+    raise _httpserver_ServerError("httpserver: Callback function " + \
+        "returned dictionary with None for some values.")
+
+  if (type(version), type(statuscode), type(statusmsg), type(headers)) != \
+      (str, int, str, dict):
+    raise _httpserver_ServerError("httpserver: Callback function " + \
+        "returned dictionary with invalid values (wrong types).")
+  
+  print "TYPE1: %s" % type(messagestream)
+  print messagestream
+  if type(messagestream) is str:
+    messagestream = _httpserver_StringIO(messagestream)
+  print "TYPE2: %s" % type(messagestream)
+  # Don't let the callback function serve HTTP/1.1 responses to an HTTP/1.0
+  # request.
+  if reqinfo['version'] == "1.0" and version == "1.1":
+    version = "1.0"
+
+  # Send response as instructed by callback
+  if version == "0.9":
+    # HTTP/0.9 doesn't have response headers.
+    _httpserver_sendfile(sock, messagestream)
+    closeconn = True
+
+  elif version == "1.0":
+    # Send the response headers:
+    response = "HTTP/1.0 " + str(statuscode) + " " + statusmsg + "\r\n"
+    for key, val in headers.items():
+      response += key + ": " + val + "\r\n"
+    response += "\r\n"
+    _httpserver_sendAll(sock, response, besteffort=True)
+
+    # Send the response body:
+    _httpserver_sendfile(sock, messagestream)
+    closeconn = True
+
+  elif version == "1.1":
+    response = "HTTP/1.1 " + str(statuscode) + " " + statusmsg + "\r\n"
+    for key, val in headers.items():
+      response += key + ": " + val + "\r\n"
+    response += "Transfer-Encoding: chunked\r\n"
+    response += "\r\n"
+
+    # Close client socket if they or the callback function asked us
+    # to close.
+    if ("Connection" in headers and "close" == headers["Connection"]) \
+        or ("Connection" in reqinfo['headers'] and "close" in \
+        reqinfo['headers']["Connection"]):
+      closeconn = True
+
+    try:
+      # Send response headers.
+      _httpserver_sendAll(sock, response)
+
+      # Read chunks from the callback and efficiently send them to
+      # the client using HTTP/1.1 chunked encoding.
+      print "TYPE3: %s" % type(messagestream)
+
+      _httpserver_sendfile_chunked(sock, messagestream)
+
+    except Exception, e:
+      if "socket" not in str(e).lower():
+        raise
+
+      # The exception we're trying to catch here is anything sock.send()
+      # raises. However, it just raises plain exceptions.
+
+      # The reason we care about the data actually going through for HTTP/1.1
+      # is that we keep connections open. If there is an error, we shouldn't
+      # keep going, so we indicate that the socket should be closed.
+      closeconn = True
+
+  else:
+    # If the cbfunc's response dictionary didn't specify 0.9, 1.0, or 1.1,
+    # it's an error.
+    raise _httpserver_ServerError("httpserver: Callback function gave " + \
+        "invalid HTTP version")
+
+  # Clean up open file handles:
+  messagestream.close()
+
+  return (closeconn, extradata)
+
+#end include httpserver.repy
+
+"""
+<Program Name>
+  viewproxy.repy
+
+<Started>
+  June 3rd, 2011
+
+<Author>
+  Evan Brynne
+
+<Purpose>
+  This program creates a proxyserver on the current vessel at port 8008. Its requests
+  and returned data are encrypted to ensure the integrity of the returned page. The
+  basis for this file was YoonSung Hong's proxyserver.repy. It uses his page chacheing
+  design, which returns a locally cached version of a page should if there are no query
+  or post requests.
+  
+  This file relies on httpserver.repy
+
+<Exception>
+  None 
+"""
+
+def clearCookies():
+  print "clearcookies"
+
+def loadPage(post_map):
+  print "IN LOAD PAGE"
+  url = post_map['page']
+  headers={'User-Agent': post_map['useragent']}
+  print "URL LOAD PAGE: %s" % url
+  print mycontext['cookies']
+  if url in mycontext['cookies']:
+    headers['Cookie'] = mycontext['cookies'][url]
+    print "IN NOT NONE"
+  try:
+    print "LOAD PAGE"
+    loaded = httpretrieve_open(url, httpheaders=headers)
+  except Exception, e:
+    print "LOAD PAGE ERROR: %s" % str(e)
+    return e
+  print loaded.headers
+  if url in mycontext['cookies']:
+    mycontext['cookies'][url] = list(set(mycontext['cookies'][url].extend(loaded.headers['Set-Cookie'])))
+  else:
+    mycontext['cookies'][url] = loaded.headers['Set-Cookie']
+  return loaded.read()
+  
+funcs = {'/page' : loadPage}  
+
+def proxyServer(request):
+  """
+  <Purpose>
+    Recieve request from viewpoints server, and after decrypting the data, load the
+    webpage from the url or from the local cache.
+  <Exception>
+    None
+  <Return>
+    Dictionary that contains header information and Html string 
+    of web page content.
+    Look more in httpserver.repy.
+  <Note>
+    1. Caching is not applied if there is query or posted data even if the url has
+    cached data.
+  """
+  
+  #path, query, post = decryptRequest(request)
+  
+  # Interpret the client requests
+  httppath = request['path']
+  query = request['querystr']
+  
+  # Bind path and query
+  completeUrl = httppath
+  if query:
+    completeUrl += "?" + query
+  print "Request: %s" % request
+  
+  posted_data = None
+  # Check for posted data
+  if request['verb'] == 'POST':
+    posted_data = request['datastream'].read()
+  params = urllib_unquote_parameters(posted_data)
+  print "Params %s" % params
+  htmlresponse = "None"
+  if completeUrl in funcs.keys():
+    htmlresponse = funcs[completeUrl](params)
+  else:
+    htmlresponse = 'Header Text: %s <br \> Map: %s' % (request, params)
+    
+  #cachedata = getCache(completeUrl)
+  
+  # Header + Content sent to client(web-browser)
+  #print "HTML: %s" % htmlresponse
+  res = {}
+  res["version"] = "1.1"
+  res["statuscode"] = 200
+  res["statusmsg"] = "OK"
+  res["headers"] = {} 
+  res["message"] = htmlresponse
+  
+  return res
+
+def getUrlPageContent(httppath, query, posted_data):
+  """
+    <Purpose>
+      Retrieve a web page along with query and posted_data.
+    <Arguments>
+      httppath:
+        path request from the browser/client.
+      query:
+        query request from the browser/client.
+      posted_dat:
+        posted data from the browser/client.
+      *All: look at httpserver for more information.
+    <Return>
+      Retrieved Html string of the web page.
+  """
+  print 'http retrieve called with ' + httppath                              
+  return httpretrieve_get_string(httppath, querydata=query, postdata=posted_data, httpheaders=None, proxy=None, timeout=30)
+
+
+def getCache(url):
+  """
+  <Purpose>
+    Create a cache dictionary. Entire url serves as key for data saved.
+  <Exception>
+    None
+  <Return>
+    String of data if cache for url exist. Otherwise, returns None.
+  """
+  
+  # dictionary saves cache data with url keys.
+  cachelistbyurl = mycontext['cache']
+  
+  if url in cachelistbyurl:
+    return cachelistbyurl[url]
+  else:
+    None
+
+
+if callfunc=='initialize':
+  """
+  <Purpose>
+    Start the proxy server at user's ip and changable port.
+  
+  <Arguments>
+    None
+    
+  <Exceptions>
+    None
+
+  <Side Effects>
+    None 
+
+  <Returns>
+    None.  
+  """  
+
+  # Proxy host/ip and port number
+  port = 63138
+  ip = getmyip()
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  elif len(callargs) == 1:
+    port = int(callargs[0])
+    ip = getmyip()
+    
+  # Cache Setup
+  mycontext['cache'] = dict([])
+
+  # Sever/Port information
+  mycontext['ip'] = ip
+  mycontext['port'] = port
+  
+  mycontext['cookies'] = {}
+  
+  # Build proxy server
+  viewProxy = httpserver_registercallback((ip, port), proxyServer)
+
+  # Report
+  print "##### Proxy running on " + ip + ":" + str(port)
+
+
