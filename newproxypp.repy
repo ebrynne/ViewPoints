@@ -883,7 +883,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
   pathstr = parsedurldict['path']
   portint = parsedurldict.get('port')
   portint = portint or 80
-  
+
   if parsedurldict['scheme'] != 'http':
     raise ValueError("URL doesn't seem to be for the HTTP protocol.")
   if hoststr is None:
@@ -894,8 +894,10 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
   # Typical HTTP sessions consist of (optionally, a series of pairs of) HTTP
   # requests followed by HTTP responses. These happen serially.
 
-  # Open connection to the web server
-  print "HTTPOPEN START"
+  # JAC: Set this up so that we can raise the right error if the 
+  # timeout_openconn doesn't work.
+  sockobj = None
+  
   try:
     if proxy is not None:
       # if there is a proxy, open a connection with the proxy instead of the actual server
@@ -914,7 +916,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
     if repr(e).startswith("timeout("):
       raise HttpConnectionError("Socket timed out connecting to host/port.")
     raise
-  print "AFTER PROXY"
+
   try:
     # Builds the HTTP request:
     httprequeststr = _httpretrieve_build_request(hoststr, portint, pathstr, \
@@ -934,7 +936,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
       raise SocketTimeoutError("Timed out")
     else:
       sockobj.settimeout(timeout - (getruntime() - starttimefloat))
-    print "AFTER REQUESTSTR"
+
     # Receive the header lines from the web server (a series of CRLF-terminated
     # lines, terminated by an empty line, or by the server closing the
     # connection.
@@ -944,19 +946,18 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
         # This should probably be replaced with page-sized reads in the future,
         # but for now, the behavior is at least correct.
         headersstr += sockobj.recv(1)
-        
       except Exception, e:
         if str(e) == "Socket closed":
           break
         else:
           raise
-    print "NEXT HEADERSTR: %s" % headersstr
+          
     httpheaderlist = headersstr.split("\r\n")
     # Ignore (a) trailing blank line(s) (for example, the response header-
     # terminating blank line).
     while len(httpheaderlist) > 0 and httpheaderlist[-1] == "":
       httpheaderlist = httpheaderlist[:-1]
-    print "AFTER HEADERLIST"
+
     # Get the status code and status message from the HTTP response.
     statuslinestr, httpheaderlist = httpheaderlist[0], httpheaderlist[1:]
 
@@ -981,7 +982,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
         "response (status code isn't integer).")
 
     httpheaderdict = _httpretrieve_parse_responseheaders(httpheaderlist)
-    print "HEADERS: %s" % httpheaderdict
+    
     # If we got any sort of redirect response, follow the redirect. Note: we
     # do *not* handle the 305 status code (use the proxy as specified in the
     # Location header) at all; I think this is best handled at a higher layer
@@ -1333,10 +1334,9 @@ def _httpretrieve_build_request(host, port, path, querydata, postdata, \
     # single server).
     if "Host" not in httpheaders:
       requeststr += "Host: " + host + ':' + str(port) + "\r\n"
-    print "Httpheaders: %s" % httpheaders
+
     for key, val in httpheaders.items():
       if key == 'Cookie':
-        print 'COOKIE: %s' % val
         for cookie in val:
           requeststr += key + ": " + cookie + '\r\n'
       else:
@@ -2277,63 +2277,60 @@ def _httpserver_process_single_request(sock, cbfunc, extradata, httpdid, \
   Evan Brynne
 
 <Purpose>
-  This program creates a proxyserver on the current vessel at port 8008. Its requests
-  and returned data are encrypted to ensure the integrity of the returned page. The
-  basis for this file was YoonSung Hong's proxyserver.repy. It uses his page chacheing
-  design, which returns a locally cached version of a page should if there are no query
-  or post requests.
+  This program creates a proxyserver on the current vessel at a user specified
+  port.Its requests and returned data are encrypted to ensure the integrity of
+  the returned page (not yet implemented). This file derives some of its
+  functionality from YoonSung Hong's proxyserver.repy. It uses his page 
+  chacheing design, which returns a locally cached version of a page if the 
+  user enables the setting.
   
-  This file relies on httpserver.repy
+  This file relies on a slightly modified version of httpserver.repy, though 
+  the changes may later be merged with trunk version.
 
 <Exception>
   None 
 """
 
 def clearCookies():
-  print "clearcookies"
+  print "I should have a clear cookies function"
+
+def useCaching(cache):
+  mycontext['usecache'] = cache
 
 def loadPage(post_map):
-  print "IN LOAD PAGE"
   url = post_map['page']
   headers={'User-Agent': post_map['useragent']}
-  print "URL LOAD PAGE: %s" % url
-  print mycontext['cookies']
   if url in mycontext['cookies']:
     headers['Cookie'] = mycontext['cookies'][url]
-    print "IN NOT NONE"
   try:
-    print "LOAD PAGE"
     loaded = httpretrieve_open(url, httpheaders=headers)
   except Exception, e:
-    print "LOAD PAGE ERROR: %s" % str(e)
+    print "Error loading page: %s" % str(e)
     return e
-  print loaded.headers
   if url in mycontext['cookies']:
     mycontext['cookies'][url] = list(set(mycontext['cookies'][url].extend(loaded.headers['Set-Cookie'])))
   else:
     mycontext['cookies'][url] = loaded.headers['Set-Cookie']
   return loaded.read()
   
-funcs = {'/page' : loadPage}  
+funcs = {'/page' : loadPage, '/viewpoints/setcache' : useCaching, \
+  '/viewpoints/clearcookies' : clearCookies}  
+
 
 def proxyServer(request):
   """
   <Purpose>
-    Recieve request from viewpoints server, and after decrypting the data, load the
-    webpage from the url or from the local cache.
+    Recieve request from viewpoints server, and after decrypting the data,
+    load the content from the url or from the local cache.
+    
   <Exception>
     None
+    
   <Return>
     Dictionary that contains header information and Html string 
     of web page content.
-    Look more in httpserver.repy.
-  <Note>
-    1. Caching is not applied if there is query or posted data even if the url has
-    cached data.
   """
-  
-  #path, query, post = decryptRequest(request)
-  
+    
   # Interpret the client requests
   httppath = request['path']
   query = request['querystr']
@@ -2342,20 +2339,20 @@ def proxyServer(request):
   completeUrl = httppath
   if query:
     completeUrl += "?" + query
-  print "Request: %s" % request
   
   posted_data = None
   # Check for posted data
   if request['verb'] == 'POST':
     posted_data = request['datastream'].read()
   params = urllib_unquote_parameters(posted_data)
-  print "Params %s" % params
+
   htmlresponse = "None"
   if completeUrl in funcs.keys():
     htmlresponse = funcs[completeUrl](params)
   else:
     htmlresponse = 'Header Text: %s <br \> Map: %s' % (request, params)
-    
+  
+  #if mycontext['usecache']
   #cachedata = getCache(completeUrl)
   
   # Header + Content sent to client(web-browser)
@@ -2369,29 +2366,11 @@ def proxyServer(request):
   
   return res
 
-def getUrlPageContent(httppath, query, posted_data):
-  """
-    <Purpose>
-      Retrieve a web page along with query and posted_data.
-    <Arguments>
-      httppath:
-        path request from the browser/client.
-      query:
-        query request from the browser/client.
-      posted_dat:
-        posted data from the browser/client.
-      *All: look at httpserver for more information.
-    <Return>
-      Retrieved Html string of the web page.
-  """
-  print 'http retrieve called with ' + httppath                              
-  return httpretrieve_get_string(httppath, querydata=query, postdata=posted_data, httpheaders=None, proxy=None, timeout=30)
-
-
 def getCache(url):
   """
   <Purpose>
-    Create a cache dictionary. Entire url serves as key for data saved.
+    Retrieves cached data for a specified url. Speeds content load times if 
+    the user enable this functionality.
   <Exception>
     None
   <Return>
@@ -2411,22 +2390,19 @@ if callfunc=='initialize':
   """
   <Purpose>
     Start the proxy server at user's ip and changable port.
-  
   <Arguments>
-    None
-    
+    port:
+      The port which the server should listen at. If no port is provided it
+      will default to port 8008
   <Exceptions>
     None
-
-  <Side Effects>
-    None 
 
   <Returns>
     None.  
   """  
 
   # Proxy host/ip and port number
-  port = 63138
+  port = 8008
   ip = getmyip()
   if len(callargs) > 1:
     raise Exception("Too many call arguments")
@@ -2435,6 +2411,7 @@ if callfunc=='initialize':
     ip = getmyip()
     
   # Cache Setup
+  mycontext['usecache']
   mycontext['cache'] = dict([])
 
   # Sever/Port information
