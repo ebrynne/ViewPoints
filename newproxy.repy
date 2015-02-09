@@ -12,10 +12,8 @@ include httpserver.repy
 
 <Purpose>
   This program creates a proxyserver on the current vessel at a user specified
-  port.Its requests and returned data are encrypted to ensure the integrity of
-  the returned page (not yet implemented). This file derives some of its
-  functionality from YoonSung Hong's proxyserver.repy. It uses his page 
-  chacheing design, which returns a locally cached version of a page if the 
+  port. This file derives some of its functionality from YoonSung Hong's proxyserver.repy. 
+  It uses his page chacheing design, which returns a locally cached version of a page if the 
   user enables the setting.
   
   This file relies on a slightly modified version of httpserver.repy, though 
@@ -31,7 +29,53 @@ def clearCookies():
 def useCaching(cache):
   mycontext['usecache'] = cache
 
+def handlePing(srcip, srcport, mess, ch):
+  print "MESS: %s" % mess
+  mycontext['ping_list'].append(getruntime() - mycontext['elapsed_start'])
+  mycontext['ping_running'] = False
+
+def pingTest(post_map):
+  myIp = getmyip()
+  mycontext['ping_list'] = []
+  numTests = int(post_map['numTests'])
+  print "NumTests: %s" % post_map['numTests']
+  print "Page: %s" % post_map['page']
+  try:
+    for i in range(0, numTests):
+      mycontext['ping_start'] = getruntime()
+      print "Start: %s" % mycontext['ping_start']
+      url = post_map['page'].split("www.")[1]
+      #ip = gethostbyname_ex(url)[2][0]
+      print url[:-1]
+      sockObj = timeout_openconn(url[:-1], 80, timeout=10)
+      sockObj.send("GET %s HTTP/1.0\r\n" % post_map['page'])
+      headersstr = ""
+      while not headersstr.endswith("\r\n\r\n"):
+        try:
+          headersstr += sockObj.recv(1)
+          print headersstr
+        except Exception, e:
+          if str(e) == "Socket closed":
+            break
+          else:
+            raise
+      print "HeadSTR: %s" %s
+      #recvmess(myIp, 63138, handlePing)  
+      #print "After RecvMess"
+      #
+      #sendmess(url[:-1], 63138, "Ping!", myIp, 63138)
+      #print "Sent Message"
+      #mycontext['ping_running'] = True
+      #while mycontext['ping_running']:
+        #print "Looping!"
+        #sleep(.2)
+  except Exception, e:
+    print "Error pinging: %s" % str(e)
+  return "%s" % mycontext['ping_list']
+  
+
 def loadPage(post_map):
+  print post_map
   url = post_map['page']
   headers={'User-Agent': post_map['useragent']}
   if url in mycontext['cookies']:
@@ -48,7 +92,7 @@ def loadPage(post_map):
   return loaded.read()
   
 funcs = {'/page' : loadPage, '/viewpoints/setcache' : useCaching, \
-  '/viewpoints/clearcookies' : clearCookies}  
+  '/viewpoints/clearcookies' : clearCookies, '/latency' : pingTest}  
 
 
 def proxyServer(request):
@@ -64,7 +108,8 @@ def proxyServer(request):
     Dictionary that contains header information and Html string 
     of web page content.
   """
-    
+  
+  print "Request: %s" % request
   # Interpret the client requests
   httppath = request['path']
   query = request['querystr']
@@ -81,12 +126,13 @@ def proxyServer(request):
   params = urllib_unquote_parameters(posted_data)
 
   htmlresponse = "None"
+  print "CUrl: %s" % completeUrl
   if completeUrl in funcs.keys():
     htmlresponse = funcs[completeUrl](params)
   else:
     htmlresponse = 'Header Text: %s <br \> Map: %s' % (request, params)
   
-  #if mycontext['usecache']
+  #if mycontext['']
   #cachedata = getCache(completeUrl)
   
   # Header + Content sent to client(web-browser)
@@ -145,7 +191,7 @@ if callfunc=='initialize':
     ip = getmyip()
     
   # Cache Setup
-  mycontext['usecache']
+  mycontext['usecache'] = False
   mycontext['cache'] = dict([])
 
   # Sever/Port information

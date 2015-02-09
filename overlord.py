@@ -66,7 +66,7 @@ import experimentlib as explib
 explib.defaulttimeout = 90
 
 # How often vessel status should be polled, in seconds
-VESSEL_POLLING_TIME = 30
+VESSEL_POLLING_TIME = 10
 
 # Log a liveness message after this many iterations of the main loop
 LOG_AFTER_THIS_MANY_LOOPS = 96
@@ -150,8 +150,9 @@ def init(geni_username, vesselcount, vesseltype, program_filename):
   config['identity'] = explib.create_identity_from_key_files(
     geni_username + '.publickey',
     geni_username + '.privatekey')
+  print config['identity']
   config['geni_port'] = explib.seattlegeni_user_port(config['identity'])
-
+  
   # Validate number of vessels on which to deploy
   num_vslcredits = explib.seattlegeni_max_vessels_allowed(config['identity'])
   if vesselcount > num_vslcredits:
@@ -253,6 +254,7 @@ def upload_to_vessels(vesselhandle_list, filename):
   # For each vesselhandle, attempt an upload
   for vh in vesselhandle_list:
     try:
+      print "UPLOADING:%s  - %s" % (vh, filename)
       explib.upload_file_to_vessel(vh, config['identity'], filename)
     except explib.NodeCommunicationError, e:
       # If upload failed, remove from vesselhandle_list...
@@ -376,7 +378,9 @@ def release_vessels(vesselhandle_list, log_string):
 
 
 
-
+def reset_vessels():
+  vesselhandle_list = explib.seattlegeni_get_acquired_vessels(config['identity'])
+  release_vessels(vesselhandle_list, 'Releasing ' + str(len(vesselhandle_list)) + ' preallocated vessels...')
 
 def list_difference(list1, list2):
   """

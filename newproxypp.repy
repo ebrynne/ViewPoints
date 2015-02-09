@@ -340,7 +340,7 @@ def urlparse_urlsplit(urlstring, default_scheme="", allow_fragments=True):
 
   # Extract the query.
   (components["path"], components["query"]) = _urlparse_splitquery(rpart)
-  print "URL %s" % components
+
   return components
 
 
@@ -897,7 +897,8 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
   # JAC: Set this up so that we can raise the right error if the 
   # timeout_openconn doesn't work.
   sockobj = None
-  
+
+  # Open connection to the web server
   try:
     if proxy is not None:
       # if there is a proxy, open a connection with the proxy instead of the actual server
@@ -951,7 +952,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
           break
         else:
           raise
-          
+
     httpheaderlist = headersstr.split("\r\n")
     # Ignore (a) trailing blank line(s) (for example, the response header-
     # terminating blank line).
@@ -982,7 +983,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
         "response (status code isn't integer).")
 
     httpheaderdict = _httpretrieve_parse_responseheaders(httpheaderlist)
-    
+
     # If we got any sort of redirect response, follow the redirect. Note: we
     # do *not* handle the 305 status code (use the proxy as specified in the
     # Location header) at all; I think this is best handled at a higher layer
@@ -1000,11 +1001,7 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
         pass
       else:
         # If the server did send a redirect location, let's go there.
-        parsedurldict = urlparse_urlsplit(redirecturlstr)
-        if parsedurldict['query'] is not None and parsedurldict['query'] != "":
-          return httpretrieve_open(redirecturlstr.split("?")[0], httpheaders={'Cookie' : httpheaderdict["Set-Cookie"]}, querydata=parsedurldict['query'])
-        else:
-          return httpretrieve_open(redirecturlstr, httpheaders={'Cookie' : httpheaderdict["Set-Cookie"]})
+        return httpretrieve_open(redirecturlstr)
 
     # If we weren't requested to redirect, and we didn't, return a read-only
     # file-like object (representing the response body) to the caller.
@@ -1336,11 +1333,7 @@ def _httpretrieve_build_request(host, port, path, querydata, postdata, \
       requeststr += "Host: " + host + ':' + str(port) + "\r\n"
 
     for key, val in httpheaders.items():
-      if key == 'Cookie':
-        for cookie in val:
-          requeststr += key + ": " + cookie + '\r\n'
-      else:
-        requeststr += key + ": " + val + '\r\n'
+      requeststr += key + ": " + val + '\r\n'
 
   # Affix post-data related headers and content:
   if methodstr == "POST":
@@ -2188,12 +2181,11 @@ def _httpserver_process_single_request(sock, cbfunc, extradata, httpdid, \
       (str, int, str, dict):
     raise _httpserver_ServerError("httpserver: Callback function " + \
         "returned dictionary with invalid values (wrong types).")
-  
-  print "TYPE1: %s" % type(messagestream)
-  print messagestream
+
+  # If the message object is a string, wrap it in a file-like object.
   if type(messagestream) is str:
     messagestream = _httpserver_StringIO(messagestream)
-  print "TYPE2: %s" % type(messagestream)
+
   # Don't let the callback function serve HTTP/1.1 responses to an HTTP/1.0
   # request.
   if reqinfo['version'] == "1.0" and version == "1.1":
@@ -2237,8 +2229,6 @@ def _httpserver_process_single_request(sock, cbfunc, extradata, httpdid, \
 
       # Read chunks from the callback and efficiently send them to
       # the client using HTTP/1.1 chunked encoding.
-      print "TYPE3: %s" % type(messagestream)
-
       _httpserver_sendfile_chunked(sock, messagestream)
 
     except Exception, e:
@@ -2297,6 +2287,50 @@ def clearCookies():
 def useCaching(cache):
   mycontext['usecache'] = cache
 
+def handlePing(srcip, srcport, mess, ch):
+  print "MESS: %s" % mess
+  mycontext['ping_list'].append(getruntime() - mycontext['elapsed_start'])
+  mycontext['ping_running'] = False
+
+def pingTest(post_map):
+  myIp = getmyip()
+  mycontext['ping_list'] = []
+  numTests = int(post_map['numTests'])
+  print "NumTests: %s" % post_map['numTests']
+  print "Page: %s" % post_map['page']
+  try:
+    for i in range(0, numTests):
+      mycontext['ping_start'] = getruntime()
+      print "Start: %s" % mycontext['ping_start']
+      url = post_map['page'].split("www.")[1]
+      #ip = gethostbyname_ex(url)[2][0]
+      print url[:-1]
+      sockObj = timeout_openconn(url[:-1], 80, timeout=10)
+      sockObj.send("GET %s HTTP/1.0\r\n" % post_map['page'])
+      headersstr = ""
+      while not headersstr.endswith("\r\n\r\n"):
+        try:
+          headersstr += sockObj.recv(1)
+        except Exception, e:
+          if str(e) == "Socket closed":
+            break
+          else:
+            raise
+      print "HeadSTR: %s" %s
+      #recvmess(myIp, 63138, handlePing)  
+      #print "After RecvMess"
+      #
+      #sendmess(url[:-1], 63138, "Ping!", myIp, 63138)
+      #print "Sent Message"
+      #mycontext['ping_running'] = True
+      #while mycontext['ping_running']:
+        #print "Looping!"
+        #sleep(.2)
+  except Exception, e:
+    print "Error pinging: %s" % str(e)
+  return "%s" % mycontext['ping_list']
+  
+
 def loadPage(post_map):
   url = post_map['page']
   headers={'User-Agent': post_map['useragent']}
@@ -2314,7 +2348,7 @@ def loadPage(post_map):
   return loaded.read()
   
 funcs = {'/page' : loadPage, '/viewpoints/setcache' : useCaching, \
-  '/viewpoints/clearcookies' : clearCookies}  
+  '/viewpoints/clearcookies' : clearCookies, '/latency' : pingTest}  
 
 
 def proxyServer(request):
@@ -2330,7 +2364,8 @@ def proxyServer(request):
     Dictionary that contains header information and Html string 
     of web page content.
   """
-    
+  
+  print "Request: %s" % request
   # Interpret the client requests
   httppath = request['path']
   query = request['querystr']
@@ -2347,12 +2382,13 @@ def proxyServer(request):
   params = urllib_unquote_parameters(posted_data)
 
   htmlresponse = "None"
+  print "CUrl: %s" % completeUrl
   if completeUrl in funcs.keys():
     htmlresponse = funcs[completeUrl](params)
   else:
     htmlresponse = 'Header Text: %s <br \> Map: %s' % (request, params)
   
-  #if mycontext['usecache']
+  #if mycontext['']
   #cachedata = getCache(completeUrl)
   
   # Header + Content sent to client(web-browser)
@@ -2411,7 +2447,7 @@ if callfunc=='initialize':
     ip = getmyip()
     
   # Cache Setup
-  mycontext['usecache']
+  mycontext['usecache'] = False
   mycontext['cache'] = dict([])
 
   # Sever/Port information

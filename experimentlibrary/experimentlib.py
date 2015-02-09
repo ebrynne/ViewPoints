@@ -121,10 +121,10 @@ import seattlegeni_xmlrpc
 import repyimporter
 
 import fastnmclient
-repytime = repyimporter.import_repy_module("time.repy")
-rsa = repyimporter.import_repy_module("rsa.repy")
-parallelize = repyimporter.import_repy_module("parallelize.repy")
-advertise = repyimporter.import_repy_module("advertise.repy")
+repytime = repyimporter.import_repy_module("time")
+rsa = repyimporter.import_repy_module("rsa")
+parallelize = repyimporter.import_repy_module("parallelize")
+advertise = repyimporter.import_repy_module("advertise")
 
 # The maximum number of node locations to return from a call to lookup_node_locations.
 max_lookup_results = 1024 * 1024
@@ -1598,12 +1598,15 @@ def _get_seattlegeni_client(identity):
     private_key_string = rsa.rsa_privatekey_to_string(identity["privatekey_dict"])
     # We use _call_seattlegeni_func because the SeattleGENIClient constructor
     # may attempt to communicate with SeattleGENI.
+    print "*****CERTS*****"
+    print SEATTLEGENI_CA_CERTS_FILES
+    print private_key_string  
     client = _call_seattlegeni_func(seattlegeni_xmlrpc.SeattleGENIClient,
                                     identity['username'],
                                     private_key_string=private_key_string,
                                     xmlrpc_url=SEATTLEGENI_XMLRPC_URL,
                                     allow_ssl_insecure=SEATTLEGENI_ALLOW_SSL_INSECURE,
-                                    ca_certs_file=SEATTLEGENI_CA_CERTS_FILES)
+                                    ca_certs_file=  SEATTLEGENI_CA_CERTS_FILES)
     identity["seattlegeniclient"] = client
     
   return identity["seattlegeniclient"]

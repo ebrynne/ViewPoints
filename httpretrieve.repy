@@ -226,10 +226,11 @@ def httpretrieve_open(url, querydata=None, postdata=None,\
       else:
         # If the server did send a redirect location, let's go there.
         parsedurldict = urlparse_urlsplit(redirecturlstr)
+        httpheaders = {'Cookie' : httpheaderdict["Set-Cookie"]} if httpheaderdict["Set-Cookie"] != None else {}
         if parsedurldict['query'] is not None and parsedurldict['query'] != "":
-          return httpretrieve_open(redirecturlstr.split("?")[0], httpheaders={'Cookie' : httpheaderdict["Set-Cookie"]}, querydata=parsedurldict['query'])
+          return httpretrieve_open(redirecturlstr.split("?")[0], httpheaders=httpheaders, querydata=parsedurldict['query'])
         else:
-          return httpretrieve_open(redirecturlstr, httpheaders={'Cookie' : httpheaderdict["Set-Cookie"]})
+          return httpretrieve_open(redirecturlstr, httpheaders=httpheaders)
 
     # If we weren't requested to redirect, and we didn't, return a read-only
     # file-like object (representing the response body) to the caller.

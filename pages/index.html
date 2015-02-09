@@ -1,49 +1,112 @@
 <html>
-<head>
-<title>ViewPoints Homepage</title>
-<script type="text/javascript" src="js/jquery.js"></script>
-<script type="text/javascript">
-$(function() {
-    $.post('/locations', function(json){
-            json.options.forEach(function(location){
-                $("#locations").append("<option value=" + location.ip + ">" + location.loc + "</option>");
-            });
-    }, "json");
-    
-    $.post('/platforms', {id : 4}, function(json){
-            $("#platforms").html('')
-            json.options.forEach(function(platform){
-                $("#platforms").append("<option value=" + platform.id + ">" + platform.desc + "</option>");
-            });
-    }, "json");
-});
+    <head>
+        <title>ViewPoints Homepage</title>
+        <script type="text/javascript" src="js/jquery.js"></script>
+        <script type="text/javascript" src="js/idtabs.js"></script>
+        <link rel="stylesheet" href="css/main.css" type="text/css" title='main' media="screen" />
+        <script type="text/javascript">
+            $(function() {
+                $.post('/locations', function(json){
+                        json.options.forEach(function(location){
+                            $("#locations").append("<option value=" + location.ip + ">" + location.loc + "</option>");
+                        });
+                }, "json");
+                
+                $.post('/platforms', {id : 4}, function(json){
+                        $("#platforms").html('')
+                        json.options.forEach(function(platform){
+                            $("#platforms").append("<option value=" + platform.id + ">" + platform.desc + "</option>");
+                        });
+						$.post('/browsers', {id : $('#platforms option:selected').val()}, function(json){
+		                        $("#browsers").html('')
+		                        json.options.forEach(function(browser){
+		                            $("#browsers").append("<option value=" + browser.id + ">" + browser.desc + "</option>");
+		                        });
+		                }, "json");
+                }, "json");
 
-function loadBrowsers() {
-    $.post('/browsers', {id : $('#platforms option:selected').val()}, function(json){
-            $("#browsers").html('')
-            json.options.forEach(function(browser){
-                $("#browsers").append("<option value=" + browser.id + ">" + browser.desc + "</option>");
+				
             });
-    }, "json");
-}
-
-</script>
-</head>
-<body>
-Viewpoints!<br />
-<form name="loadPage" action="location" method="GET">
-<label for="page">Page URL:</label>
-<input type="text" name="url" id="page"></input><br />
-<label for="locations">Location</label>
-<select name="loc" id="locations">
-</select><br />
-<label for="platforms">Platforms:</label>
-<select id="platforms" onchange="loadBrowsers()">
-</select><br />
-<label for="browser">Browser:</label>
-<select name="browser" id="browsers">
-</select><br />
-<input type="submit" value="Load Page"></input>
-</form>
-</body>
+            
+            function loadBrowsers() {
+                $.post('/browsers', {id : $('#platforms option:selected').val()}, function(json){
+                        $("#browsers").html('')
+                        json.options.forEach(function(browser){
+                            $("#browsers").append("<option value=" + browser.id + ">" + browser.desc + "</option>");
+                        });
+                }, "json");
+            }
+        </script>
+    </head>
+    <body>
+        <div class="usual"> 
+            <ul class="idTabs"> 
+                <li><a href="#pageLoad" class="selected">Localization</a></li> 
+                <li><a href="#latTest" >Connectivity</a></li> 
+				<li><a href="#integrity">Content Integrity</a></li>
+            </ul> 
+            <div id="pageLoad" style="display: none; ">
+                <form name="loadForm" action="location" method="GET">
+                    <label for="diff">Test Type:</label>
+                    <input type="radio" name="diff" value="1" />Diff with local version   
+                    <input type="radio" name="diff" value="0" />Plain page load<br />
+                    <label for="page">Page URL:</label>
+                    <input type="text" name="url" id="page"></input><br />
+                    <label for="locations">Location</label>
+                    <select name="loc" id="locations">
+                    </select><br />
+                    <label for="platforms">Platforms:</label>
+                    <select id="platforms" onchange="loadBrowsers()">
+                    </select><br />
+                    <label for="browser">Browser:</label>
+                    <select name="browser" id="browsers">
+                    </select><br />
+                    <input type="submit" value="Load Page"></input>
+                </form>
+            </div> 
+            <div id="latTest" style="display: none; ">
+                <span>Currently deployed on <span style="font-weight: bold;">10</span> vessels</span></span>
+				<hr />
+                <form name="loadPage" action="latency" method="GET">
+					Number of nodes to test from: <select>
+						<option value="10">10</option>
+						<option value="20">20</option>
+						<option value="30">30</option>
+						<option value="40">40</option>
+						<option value="50">50</option>
+						<option value="60">60</option>
+						<option value="70">70</option>
+						<option value="80">80</option>
+						<option value="90">90</option>
+						<option value="100">100</option>
+					</select>
+                    &nbsp;<label for="page">Page URL:</label><input type="text" name="url" id="page"></input><br />
+					<hr/>
+					<span class="testTitle">Select Tests</span><br />
+					<label for="testLat">Connectivity:</label>
+					<input name="testLat" type="checkbox"></input>&nbsp;|&nbsp;
+					<label for="testLat">Available Ports:</label>
+					<input name="testLat" type="checkbox"></input>&nbsp;|&nbsp;
+					<label for="testLat"> Paris Traceroute:</label>
+					<input name="testLat" type="checkbox"></input>&nbsp;|&nbsp;
+					<hr>
+					<span class="testTitle">Latency</span><br/>
+					<label for="testLat">Test Latency:</label>
+					<input name="testLat" type="checkbox"></input>
+                    <label for="numTests">Number of Iterations</label>
+                    <input type="text" name="numTests" id="numTests" value="10"></input><br />
+                    <input type="submit" value="Test Latency"></input>
+                </form>
+            </div> 
+			<div id="integrity" style="display: none">
+                <form name="loadPage" action="latency" method="GET">
+                    <label for="page">Page URL:</label>
+                    <input type="text" name="url" id="page"></input><br />
+                    <input type="submit" value="Verify Content Integrity"></input>
+                </form>
+            </div>
+			<a href="/refresh_vessels" style="color:#FFF">Refresh Node List</a>
+        </div>
+        
+    </body>
 </html>
